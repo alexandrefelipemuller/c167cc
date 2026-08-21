@@ -11,7 +11,7 @@ sum_point:
 	SUB      SP, #2              ; allocate locals + spills
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'p'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/struct_basic.c:8
+	; source: examples/struct_basic.c:8
 	MOV      R0, [R15+#0]        ; R0 = p
 	MOV      R1, [R0]            
 	MOV      R0, [R15+#0]        ; R0 = p
@@ -32,7 +32,7 @@ manhattan:
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'a'
 	MOV      [R15+#2], R5        ; spill incoming parameter 'b'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/struct_basic.c:14
+	; source: examples/struct_basic.c:14
 	MOV      R0, [R15+#0]        ; R0 = a
 	MOV      R1, [R0]            
 	MOV      R0, [R15+#2]        ; R0 = b
@@ -42,7 +42,7 @@ manhattan:
 	MOV      R1, R15             
 	ADD      R1, #4              
 	MOV      [R1], R0            
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/struct_basic.c:15
+	; source: examples/struct_basic.c:15
 	MOV      R0, [R15+#0]        ; R0 = a
 	MOV      R1, #2              
 	MOV      R2, R0              
@@ -61,7 +61,7 @@ manhattan:
 	MOV      R3, R0              
 	ADD      R3, R1              
 	MOV      [R3], R2            
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/struct_basic.c:16
+	; source: examples/struct_basic.c:16
 	MOV      R0, R15             
 	ADD      R0, #4              
 	MOV      R4, R0              

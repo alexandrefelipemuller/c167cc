@@ -10,7 +10,7 @@ pick:
 	SUB      SP, #2              ; allocate locals + spills
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'which'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/enum_basic.c:10
+	; source: examples/enum_basic.c:10
 	MOV      R0, [R15+#0]        ; R0 = which
 	MOV      R1, #0              
 	CMP      R0, R1              
@@ -20,18 +20,18 @@ pick:
 .Lcmp_true_1:
 	MOV      R2, #1              
 .Lcmp_end_1:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/enum_basic.c:13
+	; source: examples/enum_basic.c:13
 	CMP      R2, #0              
 	JMPR     cc_NZ, .Lpick_if_then_0
 	JMPR     cc_UC, .Lpick_if_end_2
 .Lpick_if_then_0:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/enum_basic.c:11
+	; source: examples/enum_basic.c:11
 	MOV      R0, #0              
 	ADD      SP, #2              ; release locals + spills
 	POP      R15                 ; restore caller's frame pointer
 	RET                          
 .Lpick_if_end_2:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/enum_basic.c:13
+	; source: examples/enum_basic.c:13
 	MOV      R0, #6              
 	ADD      SP, #2              ; release locals + spills
 	POP      R15                 ; restore caller's frame pointer

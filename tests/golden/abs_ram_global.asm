@@ -11,7 +11,8 @@ rpm		EQU	01234H		; @ram @0x1234 (uint16_t)
 read_rpm:
 	PUSH     R15                 ; save caller's frame pointer
 	MOV      R15, SP             ; establish frame pointer
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/abs_ram_global.c:6
+	; source: examples/abs_ram_global.c:6
 	MOV      R0, rpm             ; R0 = rpm
 	POP      R15                 ; restore caller's frame pointer
 	RET                          
+

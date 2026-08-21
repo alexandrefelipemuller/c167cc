@@ -11,14 +11,14 @@ max_vetor:
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'v'
 	MOV      [R15+#2], R5        ; spill incoming parameter 'n'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/max_vetor.c:3
+	; source: examples/max_vetor.c:3
 	MOV      R0, [R15+#0]        ; R0 = v
 	MOV      R1, #0              
 	MOV      R2, R0              
 	ADD      R2, R1              
 	MOV      R0, [R2]            
 	MOV      [R15+#4], R0        ; maior = R0
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/max_vetor.c:5
+	; source: examples/max_vetor.c:5
 	MOV      R0, #1              
 	MOV      [R15+#6], R0        ; i = R0
 .Lmax_vetor_for_cond_0:
@@ -35,7 +35,7 @@ max_vetor:
 	JMPR     cc_NZ, .Lmax_vetor_for_body_1
 	JMPR     cc_UC, .Lmax_vetor_for_end_3
 .Lmax_vetor_for_body_1:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/max_vetor.c:6
+	; source: examples/max_vetor.c:6
 	MOV      R0, [R15+#0]        ; R0 = v
 	MOV      R1, [R15+#6]        ; R1 = i
 	MOV      R2, #2              
@@ -52,12 +52,12 @@ max_vetor:
 .Lcmp_true_2:
 	MOV      R2, #1              
 .Lcmp_end_2:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/max_vetor.c:8
+	; source: examples/max_vetor.c:8
 	CMP      R2, #0              
 	JMPR     cc_NZ, .Lmax_vetor_if_then_4
 	JMPR     cc_UC, .Lmax_vetor_if_end_6
 .Lmax_vetor_if_then_4:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/max_vetor.c:7
+	; source: examples/max_vetor.c:7
 	MOV      R0, [R15+#0]        ; R0 = v
 	MOV      R1, [R15+#6]        ; R1 = i
 	MOV      R2, #2              
@@ -69,7 +69,7 @@ max_vetor:
 	MOV      [R15+#4], R0        ; maior = R0
 .Lmax_vetor_if_end_6:
 .Lmax_vetor_for_post_2:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/max_vetor.c:5
+	; source: examples/max_vetor.c:5
 	MOV      R0, [R15+#6]        ; R0 = i
 	MOV      R1, #1              
 	MOV      R2, R0              
@@ -77,8 +77,9 @@ max_vetor:
 	MOV      [R15+#6], R2        ; i = R2
 	JMPR     cc_UC, .Lmax_vetor_for_cond_0
 .Lmax_vetor_for_end_3:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/max_vetor.c:9
+	; source: examples/max_vetor.c:9
 	MOV      R0, [R15+#4]        ; R0 = maior
 	ADD      SP, #8              ; release locals + spills
 	POP      R15                 ; restore caller's frame pointer
 	RET                          
+

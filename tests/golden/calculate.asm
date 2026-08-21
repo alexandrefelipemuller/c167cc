@@ -11,7 +11,7 @@ calculate:
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'rpm'
 	MOV      [R15+#2], R5        ; spill incoming parameter 'load'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/calculate.c:3
+	; source: examples/calculate.c:3
 	MOV      R0, [R15+#0]        ; R0 = rpm
 	MOV      R1, #3000           
 	CMP      R0, R1              
@@ -21,12 +21,12 @@ calculate:
 .Lcmp_true_1:
 	MOV      R2, #1              
 .Lcmp_end_1:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/calculate.c:6
+	; source: examples/calculate.c:6
 	CMP      R2, #0              
 	JMPR     cc_NZ, .Lcalculate_if_then_0
 	JMPR     cc_UC, .Lcalculate_if_end_2
 .Lcalculate_if_then_0:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/calculate.c:4
+	; source: examples/calculate.c:4
 	MOV      R0, [R15+#2]        ; R0 = load
 	MOV      R1, #10             
 	MOV      R2, R0              
@@ -36,8 +36,9 @@ calculate:
 	POP      R15                 ; restore caller's frame pointer
 	RET                          
 .Lcalculate_if_end_2:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/calculate.c:6
+	; source: examples/calculate.c:6
 	MOV      R0, [R15+#2]        ; R0 = load
 	ADD      SP, #4              ; release locals + spills
 	POP      R15                 ; restore caller's frame pointer
 	RET                          
+

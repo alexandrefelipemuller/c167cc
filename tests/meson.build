@@ -16,7 +16,12 @@ golden_examples = [
 foreach name : golden_examples
   test('golden-' + name,
     find_program('golden_test.sh'),
-    args : [c167cc_exe.full_path(), meson.source_root() / 'examples' / (name + '.c'),
+    # The source path is passed relative to workdir (not
+    # meson.source_root() / ...) so it ends up verbatim in the generated
+    # "; source: ..." comments - keeping the golden .asm files portable
+    # across machines/checkout locations instead of baking in an
+    # absolute path.
+    args : [c167cc_exe.full_path(), 'examples' / (name + '.c'),
             meson.source_root() / 'tests' / 'golden' / (name + '.asm')],
     workdir : meson.source_root())
 endforeach

@@ -11,7 +11,7 @@ bubble_sort:
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'v'
 	MOV      [R15+#2], R5        ; spill incoming parameter 'n'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/bubble_sort.c:4
+	; source: examples/bubble_sort.c:4
 	MOV      R0, #0              
 	MOV      [R15+#4], R0        ; i = R0
 .Lbubble_sort_for_cond_0:
@@ -28,7 +28,7 @@ bubble_sort:
 	JMPR     cc_NZ, .Lbubble_sort_for_body_1
 	JMPR     cc_UC, .Lbubble_sort_for_end_3
 .Lbubble_sort_for_body_1:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/bubble_sort.c:5
+	; source: examples/bubble_sort.c:5
 	MOV      R0, #0              
 	MOV      [R15+#6], R0        ; j = R0
 .Lbubble_sort_for_cond_4:
@@ -51,7 +51,7 @@ bubble_sort:
 	JMPR     cc_NZ, .Lbubble_sort_for_body_5
 	JMPR     cc_UC, .Lbubble_sort_for_end_7
 .Lbubble_sort_for_body_5:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/bubble_sort.c:6
+	; source: examples/bubble_sort.c:6
 	MOV      R0, [R15+#0]        ; R0 = v
 	MOV      R1, [R15+#6]        ; R1 = j
 	MOV      R2, #2              
@@ -78,12 +78,12 @@ bubble_sort:
 .Lcmp_true_3:
 	MOV      R2, #1              
 .Lcmp_end_3:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/bubble_sort.c:11
+	; source: examples/bubble_sort.c:11
 	CMP      R2, #0              
 	JMPR     cc_NZ, .Lbubble_sort_if_then_8
 	JMPR     cc_UC, .Lbubble_sort_if_end_10
 .Lbubble_sort_if_then_8:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/bubble_sort.c:7
+	; source: examples/bubble_sort.c:7
 	MOV      R0, [R15+#0]        ; R0 = v
 	MOV      R1, [R15+#6]        ; R1 = j
 	MOV      R2, #2              
@@ -93,7 +93,7 @@ bubble_sort:
 	ADD      R1, R3              
 	MOV      R0, [R1]            
 	MOV      [R15+#8], R0        ; tmp = R0
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/bubble_sort.c:8
+	; source: examples/bubble_sort.c:8
 	MOV      R0, [R15+#0]        ; R0 = v
 	MOV      R1, [R15+#6]        ; R1 = j
 	MOV      R2, #1              
@@ -113,7 +113,7 @@ bubble_sort:
 	MOV      R2, R1              
 	ADD      R2, R8              
 	MOV      [R2], R0            
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/bubble_sort.c:9
+	; source: examples/bubble_sort.c:9
 	MOV      R0, [R15+#8]        ; R0 = tmp
 	MOV      R1, [R15+#0]        ; R1 = v
 	MOV      R2, [R15+#6]        ; R2 = j
@@ -128,7 +128,7 @@ bubble_sort:
 	MOV      [R2], R0            
 .Lbubble_sort_if_end_10:
 .Lbubble_sort_for_post_6:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/bubble_sort.c:5
+	; source: examples/bubble_sort.c:5
 	MOV      R0, [R15+#6]        ; R0 = j
 	MOV      R1, #1              
 	MOV      R2, R0              
@@ -137,7 +137,7 @@ bubble_sort:
 	JMPR     cc_UC, .Lbubble_sort_for_cond_4
 .Lbubble_sort_for_end_7:
 .Lbubble_sort_for_post_2:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/bubble_sort.c:4
+	; source: examples/bubble_sort.c:4
 	MOV      R0, [R15+#4]        ; R0 = i
 	MOV      R1, #1              
 	MOV      R2, R0              
@@ -148,3 +148,4 @@ bubble_sort:
 	ADD      SP, #10             ; release locals + spills
 	POP      R15                 ; restore caller's frame pointer
 	RET                          
+

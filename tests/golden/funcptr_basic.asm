@@ -14,7 +14,7 @@ add:
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'a'
 	MOV      [R15+#2], R5        ; spill incoming parameter 'b'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/funcptr_basic.c:3
+	; source: examples/funcptr_basic.c:3
 	MOV      R0, [R15+#0]        ; R0 = a
 	MOV      R1, [R15+#2]        ; R1 = b
 	MOV      R2, R0              
@@ -30,7 +30,7 @@ sub:
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'a'
 	MOV      [R15+#2], R5        ; spill incoming parameter 'b'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/funcptr_basic.c:8
+	; source: examples/funcptr_basic.c:8
 	MOV      R0, [R15+#0]        ; R0 = a
 	MOV      R1, [R15+#2]        ; R1 = b
 	MOV      R2, R0              
@@ -47,7 +47,7 @@ apply:
 	MOV      [R15+#0], R4        ; spill incoming parameter 'op'
 	MOV      [R15+#2], R5        ; spill incoming parameter 'x'
 	MOV      [R15+#4], R6        ; spill incoming parameter 'y'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/funcptr_basic.c:13
+	; source: examples/funcptr_basic.c:13
 	MOV      R0, [R15+#0]        ; R0 = op
 	MOV      R1, [R15+#2]        ; R1 = x
 	MOV      R2, [R15+#4]        ; R2 = y
@@ -64,10 +64,10 @@ run:
 	PUSH     R15                 ; save caller's frame pointer
 	SUB      SP, #8              ; allocate locals + spills
 	MOV      R15, SP             ; establish frame pointer
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/funcptr_basic.c:18
+	; source: examples/funcptr_basic.c:18
 	MOV      R0, #add            ; near address of global
 	MOV      [R15+#0], R0        ; fp = R0
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/funcptr_basic.c:19
+	; source: examples/funcptr_basic.c:19
 	MOV      R0, [R15+#0]        ; R0 = fp
 	MOV      R1, #3              
 	MOV      R2, #4              
@@ -77,7 +77,7 @@ run:
 	CALLR    apply               
 	MOV      R3, R0              ; function result
 	MOV      [R15+#2], R3        ; r1 = R3
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/funcptr_basic.c:20
+	; source: examples/funcptr_basic.c:20
 	MOV      R0, #sub            ; near address of global
 	MOV      R1, #10             
 	MOV      R2, #4              
@@ -87,7 +87,7 @@ run:
 	CALLR    apply               
 	MOV      R3, R0              ; function result
 	MOV      [R15+#4], R3        ; r2 = R3
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/funcptr_basic.c:21
+	; source: examples/funcptr_basic.c:21
 	MOV      R0, [R15+#0]        ; R0 = fp
 	MOV      R1, #1              
 	MOV      R2, #2              
@@ -96,7 +96,7 @@ run:
 	CALLI    cc_UC, R0           
 	MOV      R3, R0              ; function result
 	MOV      [R15+#6], R3        ; r3 = R3
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/funcptr_basic.c:22
+	; source: examples/funcptr_basic.c:22
 	MOV      R0, [R15+#2]        ; R0 = r1
 	MOV      R1, [R15+#4]        ; R1 = r2
 	MOV      R2, R0              

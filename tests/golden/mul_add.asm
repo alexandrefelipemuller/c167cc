@@ -10,7 +10,7 @@ test:
 	SUB      SP, #2              ; allocate locals + spills
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'x'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/mul_add.c:3
+	; source: examples/mul_add.c:3
 	MOV      R0, [R15+#0]        ; R0 = x
 	MOV      R1, #10             
 	MULU     R0, R1              
@@ -22,3 +22,4 @@ test:
 	ADD      SP, #2              ; release locals + spills
 	POP      R15                 ; restore caller's frame pointer
 	RET                          
+

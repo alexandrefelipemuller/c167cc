@@ -11,7 +11,7 @@ add:
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'a'
 	MOV      [R15+#2], R5        ; spill incoming parameter 'b'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/add.c:3
+	; source: examples/add.c:3
 	MOV      R0, [R15+#0]        ; R0 = a
 	MOV      R1, [R15+#2]        ; R1 = b
 	MOV      R2, R0              
@@ -20,3 +20,4 @@ add:
 	ADD      SP, #4              ; release locals + spills
 	POP      R15                 ; restore caller's frame pointer
 	RET                          
+

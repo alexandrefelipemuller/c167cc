@@ -10,7 +10,7 @@ fatorial_rec:
 	SUB      SP, #2              ; allocate locals + spills
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'n'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/fatorial_rec.c:3
+	; source: examples/fatorial_rec.c:3
 	MOV      R0, [R15+#0]        ; R0 = n
 	MOV      R1, #1              
 	CMP      R0, R1              
@@ -20,18 +20,18 @@ fatorial_rec:
 .Lcmp_true_1:
 	MOV      R2, #1              
 .Lcmp_end_1:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/fatorial_rec.c:5
+	; source: examples/fatorial_rec.c:5
 	CMP      R2, #0              
 	JMPR     cc_NZ, .Lfatorial_rec_if_then_0
 	JMPR     cc_UC, .Lfatorial_rec_if_end_2
 .Lfatorial_rec_if_then_0:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/fatorial_rec.c:4
+	; source: examples/fatorial_rec.c:4
 	MOV      R0, #1              
 	ADD      SP, #2              ; release locals + spills
 	POP      R15                 ; restore caller's frame pointer
 	RET                          
 .Lfatorial_rec_if_end_2:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/fatorial_rec.c:5
+	; source: examples/fatorial_rec.c:5
 	MOV      R0, [R15+#0]        ; R0 = n
 	MOV      R1, [R15+#0]        ; R1 = n
 	MOV      R2, #1              
@@ -46,3 +46,4 @@ fatorial_rec:
 	ADD      SP, #2              ; release locals + spills
 	POP      R15                 ; restore caller's frame pointer
 	RET                          
+

@@ -10,10 +10,10 @@ fatorial:
 	SUB      SP, #6              ; allocate locals + spills
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'n'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/fatorial.c:3
+	; source: examples/fatorial.c:3
 	MOV      R0, #1              
 	MOV      [R15+#2], R0        ; result = R0
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/fatorial.c:5
+	; source: examples/fatorial.c:5
 	MOV      R0, #2              
 	MOV      [R15+#4], R0        ; i = R0
 .Lfatorial_for_cond_0:
@@ -30,14 +30,14 @@ fatorial:
 	JMPR     cc_NZ, .Lfatorial_for_body_1
 	JMPR     cc_UC, .Lfatorial_for_end_3
 .Lfatorial_for_body_1:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/fatorial.c:6
+	; source: examples/fatorial.c:6
 	MOV      R0, [R15+#2]        ; R0 = result
 	MOV      R1, [R15+#4]        ; R1 = i
 	MULU     R0, R1              
 	MOV      R2, MDL             ; low word of MDL:MDH product
 	MOV      [R15+#2], R2        ; result = R2
 .Lfatorial_for_post_2:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/fatorial.c:5
+	; source: examples/fatorial.c:5
 	MOV      R0, [R15+#4]        ; R0 = i
 	MOV      R1, #1              
 	MOV      R2, R0              
@@ -45,8 +45,9 @@ fatorial:
 	MOV      [R15+#4], R2        ; i = R2
 	JMPR     cc_UC, .Lfatorial_for_cond_0
 .Lfatorial_for_end_3:
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/fatorial.c:8
+	; source: examples/fatorial.c:8
 	MOV      R0, [R15+#2]        ; R0 = result
 	ADD      SP, #6              ; release locals + spills
 	POP      R15                 ; restore caller's frame pointer
 	RET                          
+

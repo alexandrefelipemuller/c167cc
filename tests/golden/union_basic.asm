@@ -10,7 +10,7 @@ reinterpret:
 	SUB      SP, #2              ; allocate locals + spills
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'v'
-	; source: /home/alexandre/Projects/centrais_oem/siemens_sir32/compiler/examples/union_basic.c:8
+	; source: examples/union_basic.c:8
 	MOV      R0, [R15+#0]        ; R0 = v
 	MOV      R1, [R0]            
 	MOV      R0, R1              ; return value
