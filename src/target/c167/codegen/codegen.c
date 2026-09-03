@@ -321,6 +321,48 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
             finish_dst(cg, i->dst);
             break;
         }
+        case IR_DIV32_SYM: {
+            /* (u16)(sym32 / b) or (u16)(sym32 % b): DIVLU/DIVL divide the
+               full MDL:MDH pair, unlike plain DIV/DIVU which only divide
+               MDL - so the 32-bit dividend must be loaded into BOTH halves
+               first (low word into MDL, high word into MDH), matching how
+               the real disassembly of the bilinear-interpolation routines
+               does it (see the long comment on IR_DIV32_SYM in ir.h and
+               try_gen_div32_sym in ir_build.c). Quotient comes back in
+               MDL, remainder in MDH - same convention as the plain 16/16
+               DIV/DIVU case above. */
+            /* Load the divisor FIRST, into SCRATCH_2, before SCRATCH_1 gets
+               reused below for both halves of the dividend in turn - keeps
+               the two scratch registers from stepping on each other, same
+               ordering discipline as the plain OP_DIV/OP_MOD case above.
+               [R15+#off] indirect addressing (locals) can only move into a
+               real register, never straight into MDL/MDH (c166asm.py has
+               no mem-to-mem_named MOV form for it) - route both halves
+               through SCRATCH_1 like every other stack load in this file,
+               instead of writing directly to MDL/MDH from memory. */
+            const char *bsrc = load_operand(cg, i->b, C167_SPILL_SCRATCH_2);
+            const char *scratch = c167_reg_name(C167_SPILL_SCRATCH_1);
+            char ops_lo[80], ops_hi[80];
+            if (i->sym->kind == SYM_LOCAL || i->sym->kind == SYM_PARAM) {
+                snprintf(ops_lo, sizeof(ops_lo), "%s, [R15+#%d]", scratch, i->sym->stack_offset);
+                snprintf(ops_hi, sizeof(ops_hi), "%s, [R15+#%d]", scratch, i->sym->stack_offset + 2);
+            } else {
+                snprintf(ops_lo, sizeof(ops_lo), "%s, %s", scratch, i->sym->name);
+                snprintf(ops_hi, sizeof(ops_hi), "%s, %s+2", scratch, i->sym->name);
+            }
+            emit_raw(cg, NULL, "MOV", ops_lo, "low word of 32-bit dividend");
+            char movmdl[48]; snprintf(movmdl, sizeof(movmdl), "MDL, %s", scratch);
+            emit_raw(cg, NULL, "MOV", movmdl, NULL);
+            emit_raw(cg, NULL, "MOV", ops_hi, "high word of 32-bit dividend");
+            char movmdh[48]; snprintf(movmdh, sizeof(movmdh), "MDH, %s", scratch);
+            emit_raw(cg, NULL, "MOV", movmdh, NULL);
+            emit_raw(cg, NULL, i->is_signed ? "DIVL" : "DIVLU", bsrc, NULL);
+            const char *d = dst_target(cg, i->dst);
+            char ops3[32]; snprintf(ops3, sizeof(ops3), "%s, %s", d, i->op == OP_DIV ? "MDL" : "MDH");
+            emit_raw(cg, NULL, "MOV", ops3, i->op == OP_DIV ? "quotient" : "remainder");
+            finish_dst(cg, i->dst);
+            break;
+        }
         case IR_LOAD_ADDR: {
             C167Reg dr = cg->ra->spilled[i->dst] ? C167_SPILL_SCRATCH_1 : cg->ra->reg[i->dst];
             gen_sym_addr_to(cg, i->sym, dr);

@@ -23,6 +23,7 @@ static void dump_inst(IrInst *i) {
         case IR_STORE_SYM: printf("  store %s, t%d\n", i->sym->name, i->a); break;
         case IR_MUL32_STORE_SYM: printf("  store32 %s, t%d %s t%d\n", i->sym->name, i->a, i->is_signed ? "smul" : "umul", i->b); break;
         case IR_SHR32_SYM: printf("  t%d = shr32 %s, %ld\n", i->dst, i->sym->name, i->imm); break;
+        case IR_DIV32_SYM: printf("  t%d = div32 %s, t%d %s\n", i->dst, i->sym->name, i->b, i->op == OP_DIV ? "udiv" : "umod"); break;
         case IR_LOAD_ADDR: printf("  t%d = addr %s\n", i->dst, i->sym->name); break;
         case IR_LOAD_MEM: printf("  t%d = load%d [t%d]\n", i->dst, i->size, i->a); break;
         case IR_STORE_MEM: printf("  store%d [t%d], t%d\n", i->size, i->a, i->b); break;

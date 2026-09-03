@@ -135,6 +135,41 @@ static int try_gen_shr32_sym(Builder *b, Expr *e, Type **out_type) {
     return i->dst;
 }
 
+/* Narrow counterpart to try_gen_shr32_sym() above, same rationale (see the
+   long comment on IR_DIV32_SYM in ir.h, found 03/09/2026 with the
+   bilinear-interpolation cluster in the sibling Sirius32 project): plain
+   IR_BINOP(OP_DIV/OP_MOD) only ever sees a single 16-bit vreg per operand,
+   so `sym32 / x` silently truncated the dividend to its low word before
+   dividing. Recognizes `ident_of_32bit_type / expr` or `ident_of_32bit_type
+   % expr` (the divisor can be any ordinary 16-bit-producing expression,
+   unlike the shift/mul patterns which only look at the immediate operand)
+   and lowers it directly to IR_DIV32_SYM (DIVLU/DIVL: dividend pre-loaded
+   into MDL:MDH) instead of inventing general register-pair division.
+   Returns -1 if the pattern doesn't match (caller falls through to the
+   normal, still-buggy-for-this-case path - not changing behavior outside
+   this exact shape). */
+static int try_gen_div32_sym(Builder *b, Expr *e, Type **out_type) {
+    if (e->kind != EXPR_BINARY || (e->op != OP_DIV && e->op != OP_MOD)) return -1;
+    if (e->lhs->kind != EXPR_IDENT) return -1;
+    Symbol *sym = scope_lookup(b->scope, e->lhs->name);
+    if (!sym) return -1;
+    if (sym->type->kind != TY_U32 && sym->type->kind != TY_I32) return -1;
+
+    e->lhs->sym = sym;
+    Type *rt;
+    int rv = gen_expr(b, e->rhs, &rt);
+
+    IrInst *i = emit(b, IR_DIV32_SYM);
+    i->dst = new_vreg(b);
+    i->sym = sym;
+    i->b = rv;
+    i->op = e->op;
+    i->is_signed = type_is_signed(sym->type);
+    i->loc = e->loc;
+    *out_type = u16_type();
+    return i->dst;
+}
+
 /* Compute address of an lvalue into a vreg (address-of semantics). Returns element type. */
 static int gen_lvalue_addr(Builder *b, Expr *e, Type **elem_type) {
     if (e->kind == EXPR_IDENT) {
@@ -469,6 +504,8 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
         case EXPR_BINARY: {
             int shr32 = try_gen_shr32_sym(b, e, out_type);
             if (shr32 >= 0) return shr32;
+            int div32 = try_gen_div32_sym(b, e, out_type);
+            if (div32 >= 0) return div32;
             if (e->op == OP_LAND || e->op == OP_LOR) {
                 /* short-circuit evaluation */
                 char *l_rhs = fmt_label(b, e->op == OP_LAND ? "and_rhs" : "or_rhs");

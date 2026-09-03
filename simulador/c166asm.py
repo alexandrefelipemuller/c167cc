@@ -561,6 +561,7 @@ class Asm:
         ('ADDC', 'RR'): 2, ('SUBC', 'RR'): 2,
         ('CMP', 'RR'): 2, ('CMP', 'RI'): 4, ('CMP', 'Rm'): 4,
         ('MUL', 'RR'): 2, ('MULU', 'RR'): 2, ('DIV', 'R'): 2,
+        ('DIVU', 'R'): 2, ('DIVL', 'R'): 2, ('DIVLU', 'R'): 2,
         ('SHR', 'RR'): 2, ('SHR', 'Ri'): 2,
         ('ASHR', 'RR'): 2, ('ASHR', 'Ri'): 2,
         ('SHL', 'RR'): 2, ('SHL', 'Ri'): 2,
@@ -736,9 +737,18 @@ class Asm:
             (r,) = operands
             return bytes([0x91, 0xF0 | r[1]])
 
-        if mnemonic == 'DIV':
+        if mnemonic in ('DIV', 'DIVU', 'DIVL', 'DIVLU'):
+            # Opcodes reais (manual Infineon, tabela 21-x): DIV=0x4B (com
+            # sinal, 16/16), DIVU=0x5B (sem sinal, 16/16), DIVL=0x6B (com
+            # sinal, 32/16, dividendo MDH:MDL), DIVLU=0x7B (sem sinal,
+            # 32/16). Achado 03/09/2026 implementando IR_DIV32_SYM no
+            # compilador: só 'DIV' tinha encoding aqui - as outras 3
+            # variantes tinham reconhecimento de sintaxe/tamanho mas caiam
+            # sempre no opcode de DIV (0x4B) na hora de gerar bytes,
+            # silenciosamente rodando a divisão errada no simulador.
             (r,) = operands
-            return bytes([0x4B, 0xF0 | r[1]])
+            opcode = {'DIV': 0x4B, 'DIVU': 0x5B, 'DIVL': 0x6B, 'DIVLU': 0x7B}[mnemonic]
+            return bytes([opcode, 0xF0 | r[1]])
 
         if mnemonic == 'RET':
             return bytes([0xCB, 0x00])  # "RET  CB 00" (manual Infineon)

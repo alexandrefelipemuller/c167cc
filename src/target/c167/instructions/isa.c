@@ -23,6 +23,8 @@ const C167Instr c167_instr_table[] = {
     { "MULU",  "Rs1, Rs2", "16x16 unsigned multiplication, result in MDL/MDH" },
     { "DIV",   "Rs",  "16/16 signed division of MDL by Rs, quotient in MDL" },
     { "DIVU",  "Rs",  "16/16 unsigned division of MDL by Rs, quotient in MDL" },
+    { "DIVL",  "Rs",  "32/16 signed division of MDH:MDL by Rs, quotient in MDL, remainder in MDH" },
+    { "DIVLU", "Rs",  "32/16 unsigned division of MDH:MDL by Rs, quotient in MDL, remainder in MDH" },
     { "CMP",   "Rd, Rs | Rd, #data16", "Comparison of two words, sets flags" },
     { "CMPB",  "Rd, Rs | Rd, #data8",  "Comparison of two bytes, sets flags" },
     { "AND",   "Rd, Rs | Rd, #data16", "Bitwise AND" },

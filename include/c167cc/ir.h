@@ -26,6 +26,28 @@ typedef enum {
                        support. imm in [0,31], is_signed selects arithmetic
                        vs logical shift of the high word. See
                        try_gen_shr32_sym() in ir_build.c. */
+    IR_DIV32_SYM,  /* dst = (u16)(sym32 / b) or (u16)(sym32 % b) - narrow
+                       counterpart to IR_MUL32_STORE_SYM/IR_SHR32_SYM: real
+                       32/16 division needs DIVLU/DIVL (dividend pre-loaded
+                       into MDL:MDH, not just MDL like plain DIV/DIVU), which
+                       this backend has no general register-pair support for.
+                       Recognizes `ident_of_32bit_type / expr16` (or `%`)
+                       where the 16-bit divisor is any ordinary expression
+                       and the result is consumed/assigned as 16-bit -
+                       see try_gen_div32_sym() in ir_build.c. Found
+                       03/09/2026 investigating the bilinear-interpolation
+                       cluster in the sibling Sirius32 project (file
+                       0x3AE96-0x3B7FE): those routines compute
+                       `uint32_t produto = (uint32_t)a * b;` (already
+                       handled by IR_MUL32_STORE_SYM) then immediately
+                       `resultado = produto / escala;` - before this, that
+                       division silently used only the low 16 bits of
+                       `produto`, discarding MDH and giving a wrong quotient
+                       whenever the product exceeded 65535, exactly the case
+                       these routines exist for. NOT supported: divisor
+                       wider than 16 bits, or a 32-bit quotient assigned back
+                       to a 32-bit variable (same narrow-result restriction
+                       as IR_SHR32_SYM). */
     IR_LOAD_ADDR,  /* dst = addr(sym) */
     IR_LOAD_MEM,   /* dst = *[addr_reg] (size in bytes) */
     IR_STORE_MEM,  /* *[addr_reg] = src (size in bytes) */
