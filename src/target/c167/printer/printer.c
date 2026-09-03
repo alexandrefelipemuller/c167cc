@@ -31,6 +31,13 @@ void c167_print(AsmProgram *prog, FILE *out) {
                 fprintf(out, "%s\t\tEQU\t0%lXH\t\t; %s @0x%lX (%s)\n",
                         g->name, g->sym->abs_addr, (g->sym->attrs & ATTR_ROM) ? "@rom" : "@ram",
                         g->sym->abs_addr, type_name(g->sym->type));
+            } else if (g->init_words) {
+                fprintf(out, "%s:\t\tDW\t", g->name);
+                for (int i = 0; i < g->n_init_words; i++) {
+                    fprintf(out, "%d", g->init_words[i]);
+                    if (i + 1 < g->n_init_words) fprintf(out, ",");
+                }
+                fprintf(out, "\t\t; %s, inicializado\n", type_name(g->sym->type));
             } else {
                 fprintf(out, "%s:\t\tDS\t%d\t\t; %s\n", g->name, type_size(g->sym->type), type_name(g->sym->type));
             }

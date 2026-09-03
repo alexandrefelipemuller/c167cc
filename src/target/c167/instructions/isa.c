@@ -75,7 +75,7 @@ static const char *reg_names[C167_REG_COUNT] = {
 
 const char *c167_reg_name(C167Reg r) { return reg_names[r]; }
 
-const C167Reg c167_arg_regs[C167_ARG_REGS_COUNT] = { C167_R4, C167_R5, C167_R6, C167_R7 };
+const C167Reg c167_arg_regs[C167_ARG_REGS_COUNT] = { C167_R4, C167_R5, C167_R6, C167_R7, C167_R8 };
 
 /* R0-R3 and R8-R10 are available to the register allocator for IR
  * temporaries; R4-R7 are reserved for argument marshalling, R11/R12 are

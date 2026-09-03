@@ -14,12 +14,12 @@ fatorial_rec:
 	MOV      R0, [R15+#0]        ; R0 = n
 	MOV      R1, #1              
 	CMP      R0, R1              
-	JMPR     cc_ULE, .Lcmp_true_1
+	JMPR     cc_ULE, .Lfatorial_rec_cmp_true_1
 	MOV      R2, #0              
-	JMPR     cc_UC, .Lcmp_end_1  
-.Lcmp_true_1:
+	JMPR     cc_UC, .Lfatorial_rec_cmp_end_1
+.Lfatorial_rec_cmp_true_1:
 	MOV      R2, #1              
-.Lcmp_end_1:
+.Lfatorial_rec_cmp_end_1:
 	; source: examples/fatorial_rec.c:5
 	CMP      R2, #0              
 	JMPR     cc_NZ, .Lfatorial_rec_if_then_0

@@ -134,6 +134,85 @@ static Type *build_funcptr_type(Type *ret) {
     return type_new_ptr(ft);
 }
 
+/* Desaçucara um inicializador agregado de LOCAL (`T x = {a, b, {c,d}};`) numa
+   sequência de atribuições comuns (`x[0]=a; x[1]=b; x[2]=c; x[3]=d;`),
+   reaproveitando a máquina normal de lvalue/atribuição (EXPR_INDEX/
+   EXPR_MEMBER/EXPR_ASSIGN) em vez de precisar de suporte dedicado no IR/
+   codegen pra inicializador de local - diferente do caso GLOBAL
+   (`flatten_init_list` em codegen.c), que precisa virar dado constante
+   estático, não código. Elementos/campos sem valor explícito no
+   inicializador (incluindo TODOS os campos quando `init` é NULL, usado
+   recursivamente) recebem `0` - mesma semântica do idioma `{0}` do C real
+   (zera o resto), essencial aqui porque `struct X x = {0};` é o padrão mais
+   comum em `reimplementacao_c/` pra zerar uma struct de resposta. */
+static void collect_init_assigns(StmtList *out, Expr *target, Type *type, Expr *init, SrcLoc loc) {
+    if (type->is_array) {
+        Type *elem = type->pointee;
+        long count = (long)type->array_len;
+        for (long i = 0; i < count; i++) {
+            Expr *idxe = expr_new(EXPR_INT_LIT, loc); idxe->ival = i;
+            Expr *elemtarget = expr_new(EXPR_INDEX, loc);
+            elemtarget->base = target; elemtarget->index = idxe;
+            Expr *sub = (init && init->kind == EXPR_INIT_LIST && i < init->n_init_elems)
+                        ? init->init_elems[i] : NULL;
+            collect_init_assigns(out, elemtarget, elem, sub, loc);
+        }
+        return;
+    }
+    if (type->kind == TY_STRUCT) {
+        StructDef *sd = type->struct_def;
+        for (int i = 0; i < sd->nfields; i++) {
+            Expr *member = expr_new(EXPR_MEMBER, loc);
+            member->base = target; member->name = strdup(sd->fields[i].name);
+            Expr *sub = (init && init->kind == EXPR_INIT_LIST && i < init->n_init_elems)
+                        ? init->init_elems[i] : NULL;
+            collect_init_assigns(out, member, sd->fields[i].type, sub, loc);
+        }
+        return;
+    }
+    /* escalar folha */
+    Expr *src = init;
+    if (!src) { src = expr_new(EXPR_INT_LIT, loc); src->ival = 0; }
+    else if (src->kind == EXPR_INIT_LIST) {
+        fprintf(stderr, "%s:%d: error: too many braces in local initializer\n", loc.file, loc.line);
+        exit(1);
+    }
+    Expr *assign = expr_new(EXPR_ASSIGN, loc);
+    assign->op = OP_ASSIGN; assign->lhs = target; assign->rhs = src;
+    Stmt *s = stmt_new(STMT_EXPR, loc);
+    s->expr = assign;
+    sl_push(out, s);
+}
+
+/* Constrói o Stmt final pra 1 declarator local: se não tem inicializador
+   agregado, devolve o STMT_DECL normal de sempre; se tem, devolve um
+   STMT_BLOCK transparente = [STMT_DECL sem init, atribuições desaçucaradas
+   uma por uma]. */
+static Stmt *decl_stmt_for(Decl *d, SrcLoc loc) {
+    if (!d->init || d->init->kind != EXPR_INIT_LIST) {
+        Stmt *s = stmt_new(STMT_DECL, loc);
+        s->decl = d;
+        return s;
+    }
+    Expr *init = d->init;
+    d->init = NULL;
+    Stmt *decl_s = stmt_new(STMT_DECL, loc);
+    decl_s->decl = d;
+
+    StmtList assigns = {0};
+    Expr *target = expr_new(EXPR_IDENT, loc);
+    target->name = strdup(d->name);
+    collect_init_assigns(&assigns, target, d->type, init, loc);
+
+    Stmt *blk = stmt_new(STMT_BLOCK, loc);
+    blk->transparent = 1;
+    blk->nstmts = assigns.n + 1;
+    blk->stmts = calloc(blk->nstmts, sizeof(Stmt *));
+    blk->stmts[0] = decl_s;
+    for (int i = 0; i < assigns.n; i++) blk->stmts[i + 1] = assigns.data[i];
+    return blk;
+}
+
 static void dl_push(DeclList *l, Decl *d) {
     if (l->n == l->cap) { l->cap = l->cap ? l->cap * 2 : 4; l->data = realloc(l->data, sizeof(Decl*) * l->cap); }
     l->data[l->n++] = d;
@@ -164,12 +243,14 @@ static void dl_push(DeclList *l, Decl *d) {
 %token TOK_EQ TOK_NE TOK_LE TOK_GE TOK_ANDAND TOK_OROR TOK_SHL TOK_SHR TOK_ARROW
 %token OP_INC OP_DEC
 %token OP_ADD_ASSIGN OP_SUB_ASSIGN OP_MUL_ASSIGN OP_DIV_ASSIGN
+%token OP_AND_ASSIGN OP_OR_ASSIGN OP_XOR_ASSIGN
 
 %type <type> type_spec
 %type <expr> expr assign_expr cond_expr logor_expr logand_expr bitor_expr bitxor_expr bitand_expr
 %type <expr> eq_expr rel_expr shift_expr add_expr mul_expr unary_expr postfix_expr primary_expr
 %type <expr> opt_expr init_opt
-%type <exprlist> arg_list
+%type <exprlist> arg_list init_list_items
+%type <expr> init_list
 %type <stmt> stmt block_stmt decl_stmt if_stmt while_stmt for_stmt simple_stmt case_stmt
 %type <stmtlist> stmt_list case_list
 %type <decl> param decl_declarator
@@ -267,6 +348,14 @@ top_item:
 enumerator_list:
       enumerator
     | enumerator_list ',' enumerator
+    | enumerator_list ','
+      /* vírgula sobrando antes do '}' - construção válida e comum em C,
+         usada em quase todo enum de reimplementacao_c/ (ex.
+         dtc_sirius32_confidence_t) - achado 21/08/2026 tentando compilar
+         esses arquivos pela 1ª vez: o parser rejeitava com "syntax error
+         near '}'", nada a ver com os emoji nos comentários (isolado por
+         teste binário: o mesmo enum sem vírgula final compilava igual,
+         com ou sem emoji no comentário). */
     ;
 
 enumerator:
@@ -367,6 +456,26 @@ decl_declarator_list:
 init_opt:
       /* empty */ { $$ = NULL; }
     | '=' assign_expr { $$ = $2; }
+    | '=' init_list { $$ = $2; }
+    ;
+
+/* Aggregate initializer `{ a, b, {c, d}, ... }` for a global array/struct -
+   only constant integer literals (and nested lists of them) are supported;
+   flattened into literal data at codegen time (see `flatten_init_list` in
+   codegen.c), never evaluated as runtime code. Not a general expression -
+   only valid straight after `=` in a declarator (`init_opt` above). */
+init_list:
+      '{' init_list_items '}'
+      { Expr *e = expr_new(EXPR_INIT_LIST, loc()); e->init_elems = $2->data; e->n_init_elems = $2->n; $$ = e; }
+    | '{' init_list_items ',' '}'
+      { Expr *e = expr_new(EXPR_INIT_LIST, loc()); e->init_elems = $2->data; e->n_init_elems = $2->n; $$ = e; }
+    ;
+
+init_list_items:
+      assign_expr { ExprList *l = calloc(1, sizeof(ExprList)); el_push(l, $1); $$ = l; }
+    | init_list { ExprList *l = calloc(1, sizeof(ExprList)); el_push(l, $1); $$ = l; }
+    | init_list_items ',' assign_expr { el_push($1, $3); $$ = $1; }
+    | init_list_items ',' init_list { el_push($1, $3); $$ = $1; }
     ;
 
 type_spec:
@@ -459,6 +568,25 @@ case_stmt:
         if ($4) { s->stmts = $4->data; s->nstmts = $4->n; }
         $$ = s;
       }
+    | KW_CASE IDENT ':' stmt_list
+      {
+        /* rótulo de case como constante de enum (`case FOO_BAR:`), não um
+           INT_LIT cru - achado 21/08/2026 compilando switch real de
+           reimplementacao_c/ pela 1ª vez (todo switch de lá usa enum, não
+           número mágico direto). Resolvido pela mesma tabela flat de
+           enum_lookup() já usada em expressões (ver primary_expr abaixo). */
+        long v;
+        if (!enum_lookup($2, &v)) {
+            fprintf(stderr, "%s:%d: error: 'case %s' is not a known enum constant "
+                             "(only INT_LIT or a previously-declared enum constant "
+                             "are supported as case labels)\n", g_input_filename, yylineno, $2);
+            exit(1);
+        }
+        Stmt *s = stmt_new(STMT_CASE, loc());
+        s->case_value = v;
+        if ($4) { s->stmts = $4->data; s->nstmts = $4->n; }
+        $$ = s;
+      }
     | KW_DEFAULT ':' stmt_list
       {
         Stmt *s = stmt_new(STMT_DEFAULT, loc());
@@ -485,9 +613,7 @@ decl_stmt:
         DeclList *l = $3;
         if (l->n == 1) {
             l->data[0]->is_local = 1;
-            Stmt *s = stmt_new(STMT_DECL, loc());
-            s->decl = l->data[0];
-            $$ = s;
+            $$ = decl_stmt_for(l->data[0], loc());
         } else {
             Stmt *blk = stmt_new(STMT_BLOCK, loc());
             blk->transparent = 1;
@@ -495,9 +621,7 @@ decl_stmt:
             blk->nstmts = l->n;
             for (int k = 0; k < l->n; k++) {
                 l->data[k]->is_local = 1;
-                Stmt *s = stmt_new(STMT_DECL, loc());
-                s->decl = l->data[k];
-                blk->stmts[k] = s;
+                blk->stmts[k] = decl_stmt_for(l->data[k], loc());
             }
             $$ = blk;
         }
@@ -569,6 +693,12 @@ assign_expr:
       { Expr *e = expr_new(EXPR_ASSIGN, loc()); e->op = OP_MUL; e->lhs = $1; e->rhs = $3; $$ = e; }
     | unary_expr OP_DIV_ASSIGN assign_expr
       { Expr *e = expr_new(EXPR_ASSIGN, loc()); e->op = OP_DIV; e->lhs = $1; e->rhs = $3; $$ = e; }
+    | unary_expr OP_AND_ASSIGN assign_expr
+      { Expr *e = expr_new(EXPR_ASSIGN, loc()); e->op = OP_AND; e->lhs = $1; e->rhs = $3; $$ = e; }
+    | unary_expr OP_OR_ASSIGN assign_expr
+      { Expr *e = expr_new(EXPR_ASSIGN, loc()); e->op = OP_OR; e->lhs = $1; e->rhs = $3; $$ = e; }
+    | unary_expr OP_XOR_ASSIGN assign_expr
+      { Expr *e = expr_new(EXPR_ASSIGN, loc()); e->op = OP_XOR; e->lhs = $1; e->rhs = $3; $$ = e; }
     ;
 
 cond_expr:

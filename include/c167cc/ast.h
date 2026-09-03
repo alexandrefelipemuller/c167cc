@@ -83,6 +83,13 @@ typedef enum {
     EXPR_POSTDEC,
     EXPR_PREINC,
     EXPR_PREDEC,
+    EXPR_INIT_LIST,    /* `{ a, b, {c, d}, ... }` - aggregate initializer for
+                          a global array/struct; only valid as a Decl's
+                          `init`, never as a general expression. Elements
+                          are constant-folded at codegen time (see
+                          `flatten_init_list` in codegen.c) - only integer
+                          literals / nested init-lists are supported, no
+                          runtime values. */
 } ExprKind;
 
 typedef enum {
@@ -130,6 +137,10 @@ typedef struct Expr {
 
     /* EXPR_CAST */
     Type *cast_type;
+
+    /* EXPR_INIT_LIST */
+    struct Expr **init_elems;
+    int n_init_elems;
 } Expr;
 
 /* ---- Statements ---- */

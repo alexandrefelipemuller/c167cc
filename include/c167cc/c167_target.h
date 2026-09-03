@@ -32,7 +32,17 @@ typedef enum {
 const char *c167_reg_name(C167Reg r);
 
 /* ---- ABI (compiler-defined, see docs/abi.md) ---- */
-#define C167_ARG_REGS_COUNT 4
+/* Achado 21/08/2026 compilando reimplementacao_c pela 1ª vez: uma função
+   real que devolve struct/union por valor (convenção "sret", ver
+   Builder.sret_sym em ir_build.c) ganha um parâmetro OCULTO extra (o
+   ponteiro de retorno, sempre o argumento 0 de verdade) - funções já com 4
+   parâmetros reais de resposta K-line (`ctx, req, req_len, session`) mais
+   o sret somam 5. R8 (do pool de temporários R0-R3/R8-R10 do alocador de
+   registradores - ver regalloc.c) é seguro de reaproveitar aqui: o
+   prólogo sempre salva o argumento recebido em R8 na pilha ANTES de
+   qualquer instrução do corpo da função ser gerada, então o alocador só
+   volta a considerar R8 livre depois disso - sem conflito. */
+#define C167_ARG_REGS_COUNT 5
 extern const C167Reg c167_arg_regs[C167_ARG_REGS_COUNT];
 #define C167_RETURN_REG C167_R0
 #define C167_FRAME_REG  C167_R15
@@ -62,6 +72,13 @@ typedef struct AsmFunc {
 typedef struct AsmGlobal {
     char *name;
     Symbol *sym;
+    /* Achatamento em runtime de um inicializador agregado constante
+       (`= {1, 2, {3, 4}}`), ver `flatten_init_list()` em codegen.c - uma
+       word por elemento escalar (após achatar arrays/structs aninhados),
+       na ordem de layout real do tipo. NULL = sem inicializador (emite
+       `DS N` reservando espaço zerado, comportamento de sempre). */
+    int *init_words;
+    int n_init_words;
     struct AsmGlobal *next;
 } AsmGlobal;
 

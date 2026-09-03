@@ -4,6 +4,86 @@ This is a deliberately scoped MVP. Priority order for this phase was
 **correctness > simplicity > testability > readability of the generated
 assembly > optimization**.
 
+## Fixed bugs (kept here for history)
+
+- **Silent label truncation in `IR_JMP`/`IR_CJMP` codegen** (found
+  02/09/2026, integrating with the sibling `Sirius32/` project — a
+  regression suite there compares every compiled leaf routine's simulated
+  behavior against the real firmware binary, function by function).
+  `fmt_label()` (`src/ir/ir_build.c`) embeds the FULL function name into
+  every generated label (`.L<fn>_<tag>_<counter>`) for `if`/`while`/`for`/
+  short-circuit `&&`/`||`/ternary. For a function with a long, descriptive
+  name (common when the C is itself a translation of disassembled
+  firmware routines, e.g. `rotina_validador_condicoes_ignicao_detonacao`,
+  44 chars), the label easily exceeds 60 characters. `src/target/c167/
+  codegen/codegen.c`'s `IR_JMP`/`IR_CJMP` cases formatted `"cc_UC, %s"` /
+  `"cc_NZ, %s"` into fixed buffers of 64/96 bytes with `snprintf` — which
+  truncates silently (no error, no warning at the call site) instead of
+  failing loudly. The truncation cut off exactly the trailing `_<counter>`
+  suffix, producing a `JMPR` to a label that is never defined anywhere
+  (only the correctly-suffixed variants exist) — `c166asm.py` (sibling
+  simulator/assembler) failed to resolve the symbol at assemble time.
+  Fixed by widening the buffers to 256 bytes (comfortable margin over any
+  realistic function name) in both `IR_JMP` and `IR_CJMP`, plus the two
+  comparison-operator (`EQ`/`NE`/`LT`/...) and unary-`!` cases that
+  `-Wformat-truncation` flagged with the same risk (128 bytes, since those
+  labels use a short fixed tag + counter, not the full function name).
+  Verified: the specific reproduction case (isolated from
+  `Sirius32/core/flags/lote_r_final_flags_e_estado.c`) now emits correctly
+  suffixed labels; `meson test` still passes the same 15/16 (the 1
+  pre-existing failure, `sim-calculate_global`, reproduces identically
+  with or without this fix — confirmed unrelated, an unsupported opcode
+  in `c166sim.py`, not a codegen regression); Sirius32's regression suite
+  went from 71/72 to 72/72 exact matches against the real firmware
+  binary.
+
+- **Widening 16x16->32 multiply always discarded the high word** (found
+  02/09/2026, same cross-checking method as the bug above). `uint32_t
+  produto = a * b;` compiled to a plain `MOV d, MDL`, silently returning
+  `0` for the high 16 bits of any product needing more than 16 bits.
+  Root cause: this compiler has no real 32-bit value support anywhere in
+  the pipeline (every value is one 16-bit-sized vreg; `IR_STORE_SYM` and
+  friends always move exactly one word regardless of the symbol's true
+  byte size). Saturating add/sub already used in the sibling project
+  happened to work anyway (the 16-bit-truncated result is already what a
+  range-comparison overflow check needs), but multiplication has no such
+  luck — the high word carries information the 16-bit view simply doesn't
+  have. Real register-pair support across the whole IR/codegen was
+  considered and explicitly rejected as out of scope (large change, real
+  regression risk to the 16-bit pipeline that already works — see the
+  user's own choice via AskUserQuestion in that session). Fixed with a
+  **narrow** special case instead of general 32-bit arithmetic:
+  - `IR_MUL32_STORE_SYM` (`try_gen_widening_mul_store_sym()` in
+    `src/ir/ir_build.c`): matches `dst_of_32bit_type = a * b` exactly
+    (direct assignment to an already-declared 32-bit variable/global) and
+    emits `MULU`/`MUL` followed by two `MOV`s writing MDL/MDH straight to
+    the destination's low/high words.
+  - `IR_SHR32_SYM` (`try_gen_shr32_sym()`, same file): matches
+    `some_32bit_var >> N` for a constant `N` in `[0,31]` and synthesizes
+    the same SHL/SHR/ADD sequence the real disassembly uses to pull a
+    scaled slice out of a 32-bit product (`N==16` is just the high word;
+    `N<16` is `(hi << (16-N)) + (lo >> N)`; `N>16` is `hi >> (N-16)`).
+
+  Outside those two exact shapes, 32-bit arithmetic still falls into the
+  old (documented) bug rather than risking a miscompile of an unforeseen
+  case. Also uncovered a latent bug in the sibling `../simulador/`
+  assembler while validating this: `MULU` was unconditionally renamed to
+  `MUL` by `../simulador/firmware_min/port_real_abi.py` (comment claimed
+  only the signed mnemonic was assemblable), which silently changes the
+  result whenever an operand has bit 15 set — invisible while only the
+  low word (MDL) was ever read (`MUL` and `MULU` agree there), broken as
+  soon as the high word (MDH) is read too. Fixed by adding real `MULU`
+  support to `../simulador/c166asm.py` (opcode `0x1B` — `c166sim.py`
+  already executed it correctly, only the assembler was missing it) and
+  removing the rename in `port_real_abi.py` (the `DIVU`→`DIV` rename
+  there is a separate, still-unfixed limitation, left alone). Verified:
+  the 4 `research/biblioteca_aritmetica/*saturada*` routines that had been
+  blocked since the pilot now produce correct results (checked via
+  Sirius32's `scripts/rodar_funcao.py` against a Python reference
+  computation, both the normal and saturating branch of each); `meson
+  test` unchanged at 15/16 (same pre-existing, unrelated failure);
+  Sirius32's `scripts/regressao_core.py` unchanged at 72/72.
+
 ## Not implemented at all (by design, this phase)
 
 - Assembler, linker, object files, ELF, relocations, machine-code
@@ -32,8 +112,14 @@ pointers to them work fully.
 
 - **32-bit integers** (`int32_t`/`uint32_t`) can be declared and
   loaded/stored, but arithmetic (`+ - * / etc.`) on them is not lowered
-  correctly by the backend yet - it treats every scalar operation as
-  16-bit. Avoid 32-bit arithmetic until this is addressed.
+  correctly by the backend in general - it treats every scalar operation as
+  16-bit. Two narrow exceptions were special-cased (see "Fixed bugs"
+  above, `IR_MUL32_STORE_SYM`/`IR_SHR32_SYM`): `dst32 = a * b` (direct
+  assignment of a widening multiply to a 32-bit variable) and
+  `some32bitvar >> N` for constant `N`. Everything else - `+`, `-`, `/`,
+  32-bit values threaded through anything but a direct-assign or a
+  constant-shift-right, function arguments/returns - is still silently
+  wrong. Avoid general 32-bit arithmetic until this is addressed.
 - **Function arguments**: only up to 4 word-sized arguments are
   supported (passed in `R4-R7`, see `docs/abi.md`). Calling or defining a
   function with more raises a compile error rather than silently spilling

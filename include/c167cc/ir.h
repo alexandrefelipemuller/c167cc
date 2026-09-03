@@ -8,6 +8,24 @@ typedef enum {
     IR_CONST,      /* dst = imm */
     IR_LOAD_SYM,   /* dst = load(sym) */
     IR_STORE_SYM,  /* store(sym, src) */
+    IR_MUL32_STORE_SYM, /* store32(sym, a * b) - widening 16x16->32 multiply
+                            stored directly into a 32-bit symbol (low word =
+                            MDL, high word = MDH). Narrow special case, NOT
+                            general 32-bit arithmetic support - see the long
+                            comment on try_gen_widening_mul_store_sym() in
+                            ir_build.c for why this exists instead of real
+                            register-pair support (found 02/09/2026,
+                            comparing compiled output against the real
+                            firmware binary in the sibling Sirius32 project:
+                            plain IR_BINOP(OP_MUL) always discarded MDH,
+                            silently returning 0 for the high word of any
+                            widening multiply). */
+    IR_SHR32_SYM,  /* dst = (u16)(sym32 >> imm) - narrow counterpart to
+                       IR_MUL32_STORE_SYM: reads a right-shifted 16-bit slice
+                       out of a 32-bit symbol without real 32-bit register
+                       support. imm in [0,31], is_signed selects arithmetic
+                       vs logical shift of the high word. See
+                       try_gen_shr32_sym() in ir_build.c. */
     IR_LOAD_ADDR,  /* dst = addr(sym) */
     IR_LOAD_MEM,   /* dst = *[addr_reg] (size in bytes) */
     IR_STORE_MEM,  /* *[addr_reg] = src (size in bytes) */

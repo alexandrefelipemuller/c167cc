@@ -15,12 +15,12 @@ calculate:
 	MOV      R0, [R15+#0]        ; R0 = rpm
 	MOV      R1, #3000           
 	CMP      R0, R1              
-	JMPR     cc_UGT, .Lcmp_true_1
+	JMPR     cc_UGT, .Lcalculate_cmp_true_1
 	MOV      R2, #0              
-	JMPR     cc_UC, .Lcmp_end_1  
-.Lcmp_true_1:
+	JMPR     cc_UC, .Lcalculate_cmp_end_1
+.Lcalculate_cmp_true_1:
 	MOV      R2, #1              
-.Lcmp_end_1:
+.Lcalculate_cmp_end_1:
 	; source: examples/calculate.c:6
 	CMP      R2, #0              
 	JMPR     cc_NZ, .Lcalculate_if_then_0

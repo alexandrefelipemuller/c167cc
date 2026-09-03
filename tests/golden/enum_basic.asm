@@ -14,12 +14,12 @@ pick:
 	MOV      R0, [R15+#0]        ; R0 = which
 	MOV      R1, #0              
 	CMP      R0, R1              
-	JMPR     cc_Z, .Lcmp_true_1  
+	JMPR     cc_Z, .Lpick_cmp_true_1
 	MOV      R2, #0              
-	JMPR     cc_UC, .Lcmp_end_1  
-.Lcmp_true_1:
+	JMPR     cc_UC, .Lpick_cmp_end_1
+.Lpick_cmp_true_1:
 	MOV      R2, #1              
-.Lcmp_end_1:
+.Lpick_cmp_end_1:
 	; source: examples/enum_basic.c:13
 	CMP      R2, #0              
 	JMPR     cc_NZ, .Lpick_if_then_0

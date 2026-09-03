@@ -65,6 +65,9 @@ ID      [A-Za-z_][A-Za-z0-9_]*
 "-="                             { return OP_SUB_ASSIGN; }
 "*="                             { return OP_MUL_ASSIGN; }
 "/="                             { return OP_DIV_ASSIGN; }
+"&="                             { return OP_AND_ASSIGN; }
+"|="                             { return OP_OR_ASSIGN; }
+"^="                             { return OP_XOR_ASSIGN; }
 "->"                             { return TOK_ARROW; }
 
 0[xX]{HEX}+                     { yylval.ival = strtol(yytext, NULL, 16); return INT_LIT; }

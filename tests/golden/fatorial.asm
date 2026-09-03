@@ -20,12 +20,12 @@ fatorial:
 	MOV      R0, [R15+#4]        ; R0 = i
 	MOV      R1, [R15+#0]        ; R1 = n
 	CMP      R0, R1              
-	JMPR     cc_ULE, .Lcmp_true_1
+	JMPR     cc_ULE, .Lfatorial_cmp_true_1
 	MOV      R2, #0              
-	JMPR     cc_UC, .Lcmp_end_1  
-.Lcmp_true_1:
+	JMPR     cc_UC, .Lfatorial_cmp_end_1
+.Lfatorial_cmp_true_1:
 	MOV      R2, #1              
-.Lcmp_end_1:
+.Lfatorial_cmp_end_1:
 	CMP      R2, #0              
 	JMPR     cc_NZ, .Lfatorial_for_body_1
 	JMPR     cc_UC, .Lfatorial_for_end_3

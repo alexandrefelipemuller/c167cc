@@ -25,12 +25,12 @@ max_vetor:
 	MOV      R0, [R15+#6]        ; R0 = i
 	MOV      R1, [R15+#2]        ; R1 = n
 	CMP      R0, R1              
-	JMPR     cc_C, .Lcmp_true_1  
+	JMPR     cc_C, .Lmax_vetor_cmp_true_1
 	MOV      R2, #0              
-	JMPR     cc_UC, .Lcmp_end_1  
-.Lcmp_true_1:
+	JMPR     cc_UC, .Lmax_vetor_cmp_end_1
+.Lmax_vetor_cmp_true_1:
 	MOV      R2, #1              
-.Lcmp_end_1:
+.Lmax_vetor_cmp_end_1:
 	CMP      R2, #0              
 	JMPR     cc_NZ, .Lmax_vetor_for_body_1
 	JMPR     cc_UC, .Lmax_vetor_for_end_3
@@ -46,12 +46,12 @@ max_vetor:
 	MOV      R0, [R1]            
 	MOV      R1, [R15+#4]        ; R1 = maior
 	CMP      R0, R1              
-	JMPR     cc_UGT, .Lcmp_true_2
+	JMPR     cc_UGT, .Lmax_vetor_cmp_true_2
 	MOV      R2, #0              
-	JMPR     cc_UC, .Lcmp_end_2  
-.Lcmp_true_2:
+	JMPR     cc_UC, .Lmax_vetor_cmp_end_2
+.Lmax_vetor_cmp_true_2:
 	MOV      R2, #1              
-.Lcmp_end_2:
+.Lmax_vetor_cmp_end_2:
 	; source: examples/max_vetor.c:8
 	CMP      R2, #0              
 	JMPR     cc_NZ, .Lmax_vetor_if_then_4

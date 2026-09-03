@@ -18,12 +18,12 @@ bubble_sort:
 	MOV      R0, [R15+#4]        ; R0 = i
 	MOV      R1, [R15+#2]        ; R1 = n
 	CMP      R0, R1              
-	JMPR     cc_C, .Lcmp_true_1  
+	JMPR     cc_C, .Lbubble_sort_cmp_true_1
 	MOV      R2, #0              
-	JMPR     cc_UC, .Lcmp_end_1  
-.Lcmp_true_1:
+	JMPR     cc_UC, .Lbubble_sort_cmp_end_1
+.Lbubble_sort_cmp_true_1:
 	MOV      R2, #1              
-.Lcmp_end_1:
+.Lbubble_sort_cmp_end_1:
 	CMP      R2, #0              
 	JMPR     cc_NZ, .Lbubble_sort_for_body_1
 	JMPR     cc_UC, .Lbubble_sort_for_end_3
@@ -41,12 +41,12 @@ bubble_sort:
 	MOV      R2, R3              
 	SUB      R2, R1              
 	CMP      R0, R2              
-	JMPR     cc_C, .Lcmp_true_2  
+	JMPR     cc_C, .Lbubble_sort_cmp_true_2
 	MOV      R1, #0              
-	JMPR     cc_UC, .Lcmp_end_2  
-.Lcmp_true_2:
+	JMPR     cc_UC, .Lbubble_sort_cmp_end_2
+.Lbubble_sort_cmp_true_2:
 	MOV      R1, #1              
-.Lcmp_end_2:
+.Lbubble_sort_cmp_end_2:
 	CMP      R1, #0              
 	JMPR     cc_NZ, .Lbubble_sort_for_body_5
 	JMPR     cc_UC, .Lbubble_sort_for_end_7
@@ -72,12 +72,12 @@ bubble_sort:
 	ADD      R2, R3              
 	MOV      R1, [R2]            
 	CMP      R0, R1              
-	JMPR     cc_UGT, .Lcmp_true_3
+	JMPR     cc_UGT, .Lbubble_sort_cmp_true_3
 	MOV      R2, #0              
-	JMPR     cc_UC, .Lcmp_end_3  
-.Lcmp_true_3:
+	JMPR     cc_UC, .Lbubble_sort_cmp_end_3
+.Lbubble_sort_cmp_true_3:
 	MOV      R2, #1              
-.Lcmp_end_3:
+.Lbubble_sort_cmp_end_3:
 	; source: examples/bubble_sort.c:11
 	CMP      R2, #0              
 	JMPR     cc_NZ, .Lbubble_sort_if_then_8
