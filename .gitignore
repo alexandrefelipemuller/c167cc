@@ -1,2 +1,4 @@
 build/
 __pycache__/
+simulador/*.bin
+simulador/firmware_min/*.bin
