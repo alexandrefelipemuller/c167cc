@@ -17,7 +17,7 @@ while [ "$1" != "--" ]; do SIM_ARGS+=("$1"); shift; done
 shift
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SIMDIR="$HERE/../../simulador"
+SIMDIR="$HERE/../simulador"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
