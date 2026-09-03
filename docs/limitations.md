@@ -66,7 +66,35 @@ assembly > optimization**.
 
   Outside those two exact shapes, 32-bit arithmetic still falls into the
   old (documented) bug rather than risking a miscompile of an unforeseen
-  case. Also uncovered a latent bug in the sibling `../simulador/`
+  case.
+
+  **Update 03/09/2026**: added a third narrow case, `IR_DIV32_SYM`
+  (`try_gen_div32_sym()` in `src/ir/ir_build.c`), for exactly the same
+  reason and found investigating the same kind of code (the
+  bilinear-interpolation cluster in the sibling Sirius32 project, file
+  `0x3AE96-0x3B7FE`, which computes a widening product and immediately
+  divides it: `produto = (uint32_t)a * b; resultado = produto / escala;`).
+  Matches `ident_of_32bit_type / expr16` or `% expr16` (dividend must be
+  an existing 32-bit variable; divisor can be any 16-bit expression,
+  unlike the shift case which only accepts a constant; result truncated
+  to 16 bits, same restriction as `IR_SHR32_SYM`) and emits `MOV
+  MDL,lo(var); MOV MDH,hi(var); DIVLU/DIVL divisor; MOV dst,MDL|MDH`. NOT
+  supported: a divisor wider than 16 bits, or a 32-bit quotient assigned
+  back to a 32-bit variable. Also fixed two bugs uncovered in the
+  reference simulator (`simulador/c166asm.py`) while validating this —
+  `DIVU`/`DIVL`/`DIVLU` had no instruction-length table entry (only
+  plain `DIV` did) and, worse, the byte-encoder emitted opcode `0x4B`
+  (signed 16/16 `DIV`) for all four mnemonics regardless of which one was
+  written, silently running the wrong division in the simulator; fixed by
+  giving each its real opcode (`DIV=0x4B`, `DIVU=0x5B`, `DIVL=0x6B`,
+  `DIVLU=0x7B`, matching what `c166sim.py` already executed). Verified
+  with a new `sim-div32_global` test (`examples/div32_global.c`,
+  `A=1234,B=777` → `produto=958818` (>65535, so this only passes if MDH
+  is genuinely read) → `QUOC=9588,REM=18`, checked against the Python
+  reference); `meson test` unchanged (16/17, same pre-existing unrelated
+  failure); Sirius32's `regressao_core.py` unchanged at 79/79.
+
+  Also uncovered a latent bug in the sibling `../simulador/`
   assembler while validating this: `MULU` was unconditionally renamed to
   `MUL` by `../simulador/firmware_min/port_real_abi.py` (comment claimed
   only the signed mnemonic was assemblable), which silently changes the
@@ -113,13 +141,15 @@ pointers to them work fully.
 - **32-bit integers** (`int32_t`/`uint32_t`) can be declared and
   loaded/stored, but arithmetic (`+ - * / etc.`) on them is not lowered
   correctly by the backend in general - it treats every scalar operation as
-  16-bit. Two narrow exceptions were special-cased (see "Fixed bugs"
-  above, `IR_MUL32_STORE_SYM`/`IR_SHR32_SYM`): `dst32 = a * b` (direct
-  assignment of a widening multiply to a 32-bit variable) and
-  `some32bitvar >> N` for constant `N`. Everything else - `+`, `-`, `/`,
-  32-bit values threaded through anything but a direct-assign or a
-  constant-shift-right, function arguments/returns - is still silently
-  wrong. Avoid general 32-bit arithmetic until this is addressed.
+  16-bit. Three narrow exceptions were special-cased (see "Fixed bugs"
+  above, `IR_MUL32_STORE_SYM`/`IR_SHR32_SYM`/`IR_DIV32_SYM`): `dst32 = a *
+  b` (direct assignment of a widening multiply to a 32-bit variable),
+  `some32bitvar >> N` for constant `N`, and `some32bitvar / expr` /
+  `some32bitvar % expr` (16-bit divisor, result truncated to 16 bits).
+  Everything else - `+`, `-`, 32-bit values threaded through anything but
+  those three exact shapes, function arguments/returns - is still
+  silently wrong. Avoid general 32-bit arithmetic until this is
+  addressed.
 - **Function arguments**: only up to 4 word-sized arguments are
   supported (passed in `R4-R7`, see `docs/abi.md`). Calling or defining a
   function with more raises a compile error rather than silently spilling
@@ -128,6 +158,50 @@ pointers to them work fully.
   generated; there is no DPP/page switching code, so `@ram`/`@rom`
   symbols must be reachable through whatever data page is active at the
   point of use. Far/huge pointers are not supported.
+
+  **Investigated 03/09/2026** (bilinear-interpolation cluster in the
+  sibling Sirius32 project, which uses `EXTP_S`/`EXTS` before indexed
+  loads to reach data outside the current 16-bit window): considered
+  adding a narrow `@far(page)` attribute (same style as `@ram(addr)`/
+  `@rom(addr)`, page number a compile-time constant) that would emit
+  `EXTP #page, #1` immediately before every load/store through the
+  attributed pointer/variable, mirroring `IR_MUL32_STORE_SYM`'s
+  "recognize one exact shape" approach. Decided **not** to implement it
+  this session: `EXTP`'s hardware effect ("override the data page for
+  exactly the next instruction") only holds if that next instruction is
+  genuinely the paired `[Rw]`/`[Rw+#off]` access with nothing emitted in
+  between - but this backend's IR is a flat, unordered-by-design
+  instruction list (`IR_LOAD_MEM`/`IR_STORE_MEM` in
+  `src/target/c167/codegen/codegen.c` take an address already computed
+  into a vreg by an arbitrary earlier sequence, and the register
+  allocator/spill logic can and does insert extra `MOV`s around any
+  instruction to load spilled operands). Making "EXTP right before this
+  specific load" a hard invariant would require either a new IR
+  instruction fused with its own load/store (a real change to
+  `IR_LOAD_MEM`/`IR_STORE_MEM` and every place that emits them for a
+  `@far`-tagged symbol) or a post-codegen peephole pass guaranteeing
+  adjacency after spilling - both bigger and riskier than this session's
+  narrow-pattern precedent, with a real chance of silently emitting a
+  page switch that a spill has since separated from its load (an
+  active-page bug, not a compile error - worse than the status quo of a
+  loud "not supported"). Left as a genuine unimplemented limitation
+  rather than forcing a fragile version; the pointer/type model itself
+  (`include/c167cc/ast.h`) also has no notion of a memory page today, so
+  supporting this properly is closer to the "real 32-bit arithmetic"
+  scope already called out above than to a narrow special case.
+- **Combined indexed + far addressing** (`[RwindRw]`/`[RwindRwPlus]`
+  forms seen in the same firmware cluster): investigated 03/09/2026
+  whether array/pointer indexing with a runtime (non-constant) index
+  already works in isolation - it does. `arr[i]` for a runtime `i`
+  already lowers correctly today via ordinary pointer arithmetic
+  (`gen_lvalue_addr`'s `EXPR_INDEX` case in `src/ir/ir_build.c`: `MULU`
+  by element size, `ADD` to the base address, then a plain `IR_LOAD_MEM`/
+  `IR_STORE_MEM` through `[Rw]`) - confirmed with a throwaway
+  `tabela[IDX]` test program, both in `--dump-asm` output and running
+  the ported instructions on `simulador/c166sim.py`. What the real
+  disassembly actually needs is this same indexed access combined with a
+  page switch first (item above) - there is no separate blocker here,
+  it's entirely the far-pointer gap.
 - **Interrupts** (`@interrupt(n)`): the generated prologue/epilogue is
   the same as a normal function (save/restore `R15`, use `RETI`); it does
   **not** save/restore the full register set, `PSW`, or install the
