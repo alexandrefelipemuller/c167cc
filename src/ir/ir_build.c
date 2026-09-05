@@ -50,6 +50,7 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type);
 static void gen_stmt(Builder *b, Stmt *s);
 
 static Type *u16_type(void) { return type_new(TY_U16); }
+static Type *u8_type(void) { return type_new(TY_U8); }
 
 /* Achado 02/09/2026 (projeto irmão Sirius32, comparando código compilado
    contra o binário original de verdade num simulador): este backend NÃO
@@ -620,6 +621,38 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
             return dst;
         }
         case EXPR_CALL: {
+            /* `c167cc_far_read16(page, off)` - compiler-recognized narrow
+               atomic far-indexed word read, NOT a real function call (no
+               CALLS is ever emitted for this name - see IR_FARREAD16_SYM in
+               ir.h for the full rationale). Checked before the general
+               EXPR_CALL handling below so this exact name never reaches
+               the normal direct/indirect call codegen. */
+            if (e->callee->kind == EXPR_IDENT &&
+                strcmp(e->callee->name, "c167cc_far_read16") == 0 &&
+                e->nargs == 2) {
+                Type *pt, *ot;
+                int page_v = gen_expr(b, e->args[0], &pt);
+                int off_v = gen_expr(b, e->args[1], &ot);
+                IrInst *fr = emit(b, IR_FARREAD16_SYM);
+                fr->dst = new_vreg(b);
+                fr->a = page_v; fr->b = off_v; fr->loc = e->loc;
+                *out_type = u16_type();
+                return fr->dst;
+            }
+            /* `c167cc_far_read8(page, off)` - byte sibling, see
+               IR_FARREAD8_SYM in ir.h. */
+            if (e->callee->kind == EXPR_IDENT &&
+                strcmp(e->callee->name, "c167cc_far_read8") == 0 &&
+                e->nargs == 2) {
+                Type *pt, *ot;
+                int page_v = gen_expr(b, e->args[0], &pt);
+                int off_v = gen_expr(b, e->args[1], &ot);
+                IrInst *fr = emit(b, IR_FARREAD8_SYM);
+                fr->dst = new_vreg(b);
+                fr->a = page_v; fr->b = off_v; fr->loc = e->loc;
+                *out_type = u8_type();
+                return fr->dst;
+            }
             /* (*fp)(...) is the same call as fp(...) - a function pointer
                dereference yields a function designator, not a memory load
                (see the EXPR_DEREF comment below), so strip any number of

@@ -52,16 +52,49 @@ matching this compiler's frame/global layout everywhere else (see
 `align2()` in the C167 backend) - there is no 4-byte alignment even for
 `int32_t`/`uint32_t` fields.
 
-**What's deliberately not supported yet** (this compiler's IR represents
-every value as one register-sized virtual register, so anything that
-would require moving a whole struct through one is rejected with a clear
-error instead of miscompiling):
+**Struct return by value and struct assignment ARE supported** (achado
+21/08/2026, compilando `reimplementacao_c` pela 1ª vez - o código real
+precisava disso pra praticamente toda função que monta uma resposta
+K-line, e de novo em 04/09/2026 ao decifrar `file 0x3B488`/`0x3B860` do
+Sirius32, ambas devolvendo par de registrador no binário original).
+Nenhum dos dois cabe num único vreg deste backend (cada valor de IR é 1
+registrador virtual - ver `docs/limitations.md`), então os dois viram
+CÓPIA CAMPO A CAMPO em vez de "mover a struct":
 
-- Struct **parameters and return values passed by value** - pass/return
-  a pointer instead (`struct Point *`).
-- Struct **assignment/copy** (`a = b;` where both are structs) - copy the
-  fields you need individually, or use pointers.
-- Struct **initializers** (`struct Point p = {1, 2};`).
+- **Retorno por valor** (`struct Point f(...) { ...; return p; }`) usa a
+  convenção "sret": a função ganha um parâmetro OCULTO adicional (sempre
+  o argumento 0 de verdade, na frente de qualquer parâmetro real
+  declarado) que é o ENDEREÇO de onde o chamador quer o resultado; o
+  `return p;` (só uma variável struct simples é aceita, não uma
+  subexpressão) vira uma cópia campo a campo pra esse endereço, e a
+  função sempre termina com `RET`/`RETI` normal (sem valor em R0 - o
+  resultado já foi escrito por cópia). Chamar essa função só é suportado
+  em 2 contextos, onde o destino final já é conhecido ANTES da chamada
+  (o que evita uma cópia extra): `struct Point x = f(...);` e
+  `x = f(...);` (`x` já declarado). Chamar em qualquer OUTRO contexto
+  (aninhado dentro de outra expressão, ex. `g(f(...))`) ainda não é
+  suportado. Como o parâmetro oculto ocupa o 1º slot de registrador de
+  argumento, uma função que devolve struct por valor tem, na prática,
+  1 argumento REAL a menos disponível (3 em vez de 4) antes de esbarrar
+  no limite de `docs/abi.md`.
+- **Atribuição/cópia** (`a = b;` onde os dois são structs, incluindo
+  `b` sendo o retorno de uma chamada de função que devolve struct - o
+  caso `b = f(...)` reusa a mesma convenção sret acima, escrevendo
+  direto no endereço de `a` sem cópia extra) - suportado quando o lado
+  esquerdo é uma variável simples (`EXPR_IDENT`); atribuir a um
+  campo/elemento de struct/array (`p->campo = outra_struct;`) ainda cai
+  no erro antigo (não miscompila, só não é suportado ainda - não usado
+  por nenhum código real compilado até agora).
+
+**O que continua deliberadamente NÃO suportado** (seria preciso mover a
+struct inteira por 1 vreg, ou uma extensão que ainda não foi escrita):
+
+- Struct **parâmetros passados por valor** - passe um ponteiro em vez
+  disso (`struct Point *`). Continua sendo um erro de compilação
+  explícito (`ir_build.c`, checado na declaração da função, antes de
+  falhar mais fundo no codegen).
+- Struct **inicializadores** (`struct Point p = {1, 2};`) - declare sem
+  inicializador e atribua os campos individualmente.
 
 Unlike `enum Name`, a `struct Name` reference *is* checked: using an
 undefined tag is a compile error. Struct tags share one flat, top-level
@@ -131,6 +164,32 @@ like any other pointer).
 `int32_t`/`uint32_t` can be declared, loaded and stored, but arithmetic on
 32-bit values is not implemented by the backend yet (see
 [limitations.md](limitations.md)).
+
+## Compiler-recognized intrinsic: `c167cc_far_read16`
+
+```c
+uint16_t c167cc_far_read16(uint16_t page, uint16_t off);  /* just a prototype - no body, ever */
+
+uint16_t read_far_word(uint16_t page, uint16_t off)
+{
+    return c167cc_far_read16(page, off);
+}
+```
+
+A direct call to this exact name, with exactly 2 arguments, is recognized
+by `ir_build.c` and never actually compiled as a function call (no `CALLS`
+is emitted, and no such function needs to exist anywhere - the plain
+prototype above only exists so the call type-checks normally, like any
+other declared-but-undefined extern). It lowers to one atomic
+`EXTP page,#1` / `MOV dst,[off]` pair with nothing emitted between them -
+see `IR_FARREAD16_SYM` in `include/c167cc/ir.h` and the "Memory
+segmentation" entry in [limitations.md](limitations.md) for why this
+exists as a single fixed intrinsic rather than a general far-pointer type.
+To read multiple consecutive far words (as real firmware routines that use
+`EXTP_S` this way typically do), call it once per word with the offset
+advanced at the C level (`c167cc_far_read16(page, off)`, then
+`c167cc_far_read16(page, off + 2)`, ...) - each call is independently
+atomic, so nothing needs to track "the pointer" across the two.
 
 ## Declarations
 

@@ -11,6 +11,7 @@ golden_examples = [
   'struct_basic',
   'union_basic',
   'funcptr_basic',
+  'farread_global',
 ]
 
 foreach name : golden_examples
@@ -41,6 +42,16 @@ test('determinism',
 # IR_DIV32_SYM work.)
 sim_dir = meson.source_root() / 'simulador'
 if run_command('test', '-d', sim_dir, check : false).returncode() == 0
+  # farread_global (IR_FARREAD16_SYM, added 04/09/2026) is NOT in sim_cases
+  # below: tests/port_to_toy_asm.py's port() only keeps the function BODY,
+  # dropping the `.bss` section - so an `@ram(addr)` symbol's EQU never
+  # reaches the toy assembler and the literal far-read offset in the C
+  # source has no live connection to wherever c166asm.py's auto-declared
+  # flat variable actually lands. The golden-farread_global test above
+  # still guards the emitted EXTP/MOV instruction sequence; the feature's
+  # real cross-validation against actual firmware (file 0x3B488, sibling
+  # Sirius32 project) was done with a dedicated one-off harness instead
+  # (see core/aritmetica/biblioteca_aritmetica_enderecos.c there).
   sim_cases = [
     ['fatorial_global', 'examples/fatorial_global.c', ['NUMERO=5'], ['RESULTADO=120']],
     ['calculate_global', 'examples/calculate_global.c', ['RPM=3500', 'LOAD=7'], ['OUT=17']],

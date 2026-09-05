@@ -363,6 +363,50 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
             finish_dst(cg, i->dst);
             break;
         }
+        case IR_FARREAD16_SYM: {
+            /* Atomic far-indexed word read (see IR_FARREAD16_SYM in ir.h):
+               EXTP page,#1 MUST be immediately followed by the paired
+               MOV d,[off] with nothing emitted in between - the real
+               hardware's page override only applies to the very next
+               instruction. Safe to use load_operand()'s returned register
+               directly (rather than forcing a copy into a fixed scratch)
+               for BOTH operands: EXTP only READS the page register (never
+               writes it), and the MOV only READS the offset register as
+               an address (never writes it) - neither `a` nor `b` is
+               mutated by this sequence, so there is no risk of clobbering
+               a still-live vreg, even if the register allocator happens
+               to reuse one of their registers for `dst` (only legal, by
+               construction, once the allocator has determined that vreg is
+               dead here). Any reload instructions load_operand() emits for
+               a spilled operand happen strictly before the EXTP, so they
+               never break EXTP/MOV adjacency. */
+            const char *page = load_operand(cg, i->a, C167_SPILL_SCRATCH_1);
+            const char *off = load_operand(cg, i->b, C167_SPILL_SCRATCH_2);
+            char extp_ops[32]; snprintf(extp_ops, sizeof(extp_ops), "%s, #1", page);
+            emit_raw(cg, NULL, "EXTP", extp_ops, "page override for the next instruction only");
+            const char *d = dst_target(cg, i->dst);
+            char mov_ops[48]; snprintf(mov_ops, sizeof(mov_ops), "%s, [%s]", d, off);
+            emit_raw(cg, NULL, "MOV", mov_ops, "far word (page-relative)");
+            finish_dst(cg, i->dst);
+            break;
+        }
+        case IR_FARREAD8_SYM: {
+            /* Byte sibling of IR_FARREAD16_SYM above - same EXTP/MOVB
+               atomicity guarantee, see IR_FARREAD8_SYM in ir.h. */
+            const char *page = load_operand(cg, i->a, C167_SPILL_SCRATCH_1);
+            const char *off = load_operand(cg, i->b, C167_SPILL_SCRATCH_2);
+            char extp_ops[32]; snprintf(extp_ops, sizeof(extp_ops), "%s, #1", page);
+            emit_raw(cg, NULL, "EXTP", extp_ops, "page override for the next instruction only");
+            const char *d = dst_target(cg, i->dst);
+            char mov_ops[48]; snprintf(mov_ops, sizeof(mov_ops), "%s, [%s]", d, off);
+            emit_raw(cg, NULL, "MOVB", mov_ops, "far byte (page-relative)");
+            /* MOVB only touches the low byte of dst (see the identical
+               note on IR_LOAD_MEM above) - zero-extend uniformly. */
+            char and_ops[48]; snprintf(and_ops, sizeof(and_ops), "%s, #0x00FF", d);
+            emit_raw(cg, NULL, "AND", and_ops, NULL);
+            finish_dst(cg, i->dst);
+            break;
+        }
         case IR_LOAD_ADDR: {
             C167Reg dr = cg->ra->spilled[i->dst] ? C167_SPILL_SCRATCH_1 : cg->ra->reg[i->dst];
             gen_sym_addr_to(cg, i->sym, dr);

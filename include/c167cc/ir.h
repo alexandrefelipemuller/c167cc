@@ -48,6 +48,45 @@ typedef enum {
                        wider than 16 bits, or a 32-bit quotient assigned back
                        to a 32-bit variable (same narrow-result restriction
                        as IR_SHR32_SYM). */
+    IR_FARREAD16_SYM, /* dst = far_read16(page=a, off=b) - one atomic
+                         EXTP page,#1 immediately followed by MOV dst,[off],
+                         with NOTHING emitted in between (same "recognize
+                         one exact C shape, emit fused raw instructions from
+                         a single codegen case" discipline as
+                         IR_MUL32_STORE_SYM/IR_SHR32_SYM/IR_DIV32_SYM).
+                         Exists because a general `@far(page)` attribute was
+                         investigated and deliberately rejected (see
+                         docs/limitations.md, "Memory segmentation"): the
+                         flat/unordered IR plus register-allocator spill
+                         insertion can't otherwise guarantee EXTP stays
+                         adjacent to its paired load, risking a silent
+                         wrong-page read. Recognized ONLY from a direct call
+                         to the exact name `c167cc_far_read16(page, off)`
+                         (see the EXPR_CALL case in ir_build.c's gen_expr) -
+                         that name is a compiler-recognized intrinsic, never
+                         actually called (no CALLS is ever emitted; the
+                         plain prototype declaration in the source exists
+                         only so semantic.c type-checks the call like any
+                         other undefined extern). Reading 2 consecutive far
+                         words (the shape needed for file 0x3B488 in the
+                         sibling Sirius32 project: EXTP_S;MOV;ADD;ADDC;
+                         EXTP_S;MOV;RETS) is composed at the C source level
+                         from 2 independent calls (offset and offset+2) -
+                         each call is independently atomic, no register-pair
+                         "advance the pointer" state needs to cross the
+                         atomic boundary. Found 04/09/2026; which register
+                         supplies the page was confirmed empirically in
+                         c166sim.py against the real firmware (varying it
+                         changes the result; varying the other register a
+                         naive reading of the call site suggested does not)
+                         before trusting any convention here. */
+    IR_FARREAD8_SYM, /* dst = far_read8(page=a, off=b) - byte sibling of
+                         IR_FARREAD16_SYM: EXTP page,#1 immediately followed
+                         by MOVB dst,[off], same atomicity guarantee, same
+                         intrinsic-recognition mechanism (exact call name
+                         `c167cc_far_read8(page, off)`). Needed for file
+                         0x194F8 in the sibling Sirius32 project, which reads
+                         far BYTES (MOVB ...,[RbindRw]) rather than words. */
     IR_LOAD_ADDR,  /* dst = addr(sym) */
     IR_LOAD_MEM,   /* dst = *[addr_reg] (size in bytes) */
     IR_STORE_MEM,  /* *[addr_reg] = src (size in bytes) */

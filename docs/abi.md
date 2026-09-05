@@ -39,6 +39,22 @@ implemented yet (see [limitations.md](limitations.md)).
 The function result is returned in `R0`. `void` functions leave `R0`
 unspecified.
 
+**Struct-by-value return** is the one exception, via a hidden pointer
+argument ("sret" convention - see
+[c-language.md#structs](c-language.md#structs) for the source-level
+rules): a function declared to return `struct Name` gets an implicit
+extra parameter, always argument slot 0 (`R4`), pointing at the caller's
+destination; every real declared parameter shifts up by one slot
+accordingly (so such a function has 3 real argument registers left, not
+4, before hitting the `R4-R7` limit above). The function's `RET`/`RETI`
+carries no value in `R0` in this case - the result was already written
+through the hidden pointer by the time control returns. This is how
+`file 0x3B488`/`file 0x3B860` (Sirius32, register-pair return in the
+original firmware) get promoted despite this compiler having no
+register-pair return of its own: the C167 target simply never sees a
+register pair, only a struct written through a pointer, same as any
+other struct-by-pointer code in this compiler.
+
 ## Stack frame
 
 Each function establishes a frame:

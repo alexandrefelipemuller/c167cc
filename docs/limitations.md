@@ -155,40 +155,61 @@ pointers to them work fully.
   function with more raises a compile error rather than silently spilling
   arguments to the stack.
 - **Memory segmentation**: only near (16-bit offset) pointers are
-  generated; there is no DPP/page switching code, so `@ram`/`@rom`
+  generated; there is no general DPP/page switching code, so `@ram`/`@rom`
   symbols must be reachable through whatever data page is active at the
-  point of use. Far/huge pointers are not supported.
+  point of use. General far/huge pointers are still not supported.
 
   **Investigated 03/09/2026** (bilinear-interpolation cluster in the
   sibling Sirius32 project, which uses `EXTP_S`/`EXTS` before indexed
   loads to reach data outside the current 16-bit window): considered
-  adding a narrow `@far(page)` attribute (same style as `@ram(addr)`/
-  `@rom(addr)`, page number a compile-time constant) that would emit
-  `EXTP #page, #1` immediately before every load/store through the
-  attributed pointer/variable, mirroring `IR_MUL32_STORE_SYM`'s
-  "recognize one exact shape" approach. Decided **not** to implement it
-  this session: `EXTP`'s hardware effect ("override the data page for
-  exactly the next instruction") only holds if that next instruction is
-  genuinely the paired `[Rw]`/`[Rw+#off]` access with nothing emitted in
-  between - but this backend's IR is a flat, unordered-by-design
-  instruction list (`IR_LOAD_MEM`/`IR_STORE_MEM` in
+  adding a general narrow `@far(page)` attribute (same style as
+  `@ram(addr)`/`@rom(addr)`, page number a compile-time constant) that
+  would emit `EXTP #page, #1` immediately before every load/store through
+  the attributed pointer/variable, mirroring `IR_MUL32_STORE_SYM`'s
+  "recognize one exact shape" approach. Decided **not** to implement a
+  general attribute that session: `EXTP`'s hardware effect ("override the
+  data page for exactly the next instruction") only holds if that next
+  instruction is genuinely the paired `[Rw]`/`[Rw+#off]` access with
+  nothing emitted in between - but this backend's IR is a flat,
+  unordered-by-design instruction list (`IR_LOAD_MEM`/`IR_STORE_MEM` in
   `src/target/c167/codegen/codegen.c` take an address already computed
   into a vreg by an arbitrary earlier sequence, and the register
   allocator/spill logic can and does insert extra `MOV`s around any
   instruction to load spilled operands). Making "EXTP right before this
-  specific load" a hard invariant would require either a new IR
-  instruction fused with its own load/store (a real change to
-  `IR_LOAD_MEM`/`IR_STORE_MEM` and every place that emits them for a
-  `@far`-tagged symbol) or a post-codegen peephole pass guaranteeing
-  adjacency after spilling - both bigger and riskier than this session's
-  narrow-pattern precedent, with a real chance of silently emitting a
-  page switch that a spill has since separated from its load (an
-  active-page bug, not a compile error - worse than the status quo of a
-  loud "not supported"). Left as a genuine unimplemented limitation
-  rather than forcing a fragile version; the pointer/type model itself
-  (`include/c167cc/ast.h`) also has no notion of a memory page today, so
-  supporting this properly is closer to the "real 32-bit arithmetic"
-  scope already called out above than to a narrow special case.
+  specific load" a hard invariant for an ARBITRARY `@far`-tagged pointer
+  would require either a new IR instruction fused with its own load/store
+  for every such pointer, or a post-codegen peephole pass guaranteeing
+  adjacency after spilling - both judged too big/risky for a general
+  attribute at the time.
+
+  **Implemented 04/09/2026, narrower than the rejected `@far` attribute**:
+  `IR_FARREAD16_SYM` (see `include/c167cc/ir.h`) takes exactly the "fused
+  IR instruction" route sketched above, but only for ONE fixed shape - a
+  call to the compiler-recognized name `c167cc_far_read16(page, off)`
+  (16-bit page, 16-bit offset, both runtime values) - lowered directly to
+  `EXTP page,#1` immediately followed by `MOV dst,[off]` inside a single
+  codegen case (`src/target/c167/codegen/codegen.c`), so nothing the
+  register allocator does can ever separate them. This sidesteps the
+  general risk above precisely because it never exposes a general `@far`
+  pointer type to the rest of the IR - there is no vreg "carrying" a far
+  address across instruction boundaries for the allocator to spill around;
+  the page and offset are ordinary 16-bit values consumed atomically at
+  the one call site. Reading N far words (as file 0x3B488 in the sibling
+  Sirius32 project does: 2 consecutive words, `EXTP_S;MOV;ADD;ADDC;
+  EXTP_S;MOV;RETS`) is composed at the C source level from N independent
+  calls (e.g. `off` and `off+2`) rather than one instruction handling both
+  - each call is independently atomic, so no "advance the pointer without
+  breaking adjacency" state needs to survive across the boundary. Cross-
+  validated against the real firmware routine at file 0x3B488 (8 test
+  cases including page/offset boundary values, via a one-off harness
+  patching the compiled function into a copy of the real binary and
+  running both from the same memory - see
+  `core/aritmetica/biblioteca_aritmetica_enderecos.c` in Sirius32).
+  Still NOT supported: a general far pointer type usable anywhere an
+  ordinary pointer is (assigned to a variable, passed as an opaque
+  argument, dereferenced through arbitrary pointer arithmetic) - that
+  remains exactly the rejected-attribute scope above, and the pointer/type
+  model (`include/c167cc/ast.h`) still has no notion of a memory page.
 - **Combined indexed + far addressing** (`[RwindRw]`/`[RwindRwPlus]`
   forms seen in the same firmware cluster): investigated 03/09/2026
   whether array/pointer indexing with a runtime (non-constant) index
@@ -290,9 +311,11 @@ see `docs/assembly-syntax.md` for the full corrected table.
 - An assembler + linker + object format, per the project's longer-term
   roadmap (`C → IR → C167 backend → .asm → C167 assembler → object →
   linker → binary`).
-- A struct-by-value calling convention, if ever needed (would require
-  redesigning the IR's one-value-per-vreg model, or at minimum a
-  hidden-pointer-argument lowering pass - not a small change).
+- ~~A struct-by-value calling convention~~ - DONE (21/08/2026): a
+  hidden-pointer-argument ("sret") lowering pass was added instead of
+  redesigning the IR's one-value-per-vreg model. See
+  `docs/abi.md#return-value` and `docs/c-language.md#structs`. Struct
+  parameters by value remain unsupported (pass a pointer).
 - Verify `CALLI`'s exact operand syntax/encoding against a real
   assembler or the full Instruction Set Manual - the excerpt available
   in this repo names the mnemonic but not its operand table (see the

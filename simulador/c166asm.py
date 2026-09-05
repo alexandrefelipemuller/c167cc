@@ -556,6 +556,10 @@ class Asm:
         ('MOV', 'RP'): 2, ('MOV', 'PR'): 2,  # indireto por registrador [Rw] (patch desta sessão)
         ('MOV', 'RA'): 4,  # reg <- #NOME (endereço de variável, não seu conteúdo)
         ('MOV', 'RO'): 4, ('MOV', 'OR'): 4,  # [Rw+#offset] (ABI de pilha do c167cc)
+        ('EXTP', 'Ri'): 2,  # EXTP Rw,#irang (forma registrador, opcode 0xDC) -
+                            # emitida pelo c167cc pra IR_FARREAD16_SYM (ver ir.h);
+                            # irang aqui é sempre 1 (cobre só a MOV [Rw] pareada
+                            # que o codegen emite logo em seguida, nada mais).
         ('ADD', 'RR'): 2, ('ADD', 'RI'): 4, ('SUB', 'RR'): 2, ('SUB', 'RI'): 4,
         ('AND', 'RI'): 4, ('OR', 'RI'): 4, ('XOR', 'RI'): 4,
         ('ADDC', 'RR'): 2, ('SUBC', 'RR'): 2,
@@ -749,6 +753,19 @@ class Asm:
             (r,) = operands
             opcode = {'DIV': 0x4B, 'DIVU': 0x5B, 'DIVL': 0x6B, 'DIVLU': 0x7B}[mnemonic]
             return bytes([opcode, 0xF0 | r[1]])
+
+        if mnemonic == 'EXTP':
+            # "EXTP Rw,#irang" (forma registrador, opcode 0xDC) - byte2 =
+            # (Rw<<4) | (irang_code<<2) | mode, mode=1 pra EXTP (0=EXTS,
+            # 2=EXTSR, 3=EXTPR - não usados aqui), irang_code = irang-1
+            # (irang em [1,4], só emitimos 1 - ver c166sim.py, opcode 0xDC,
+            # e c166dis.py 'Rwirang2', fórmula confirmada contra firmware
+            # real: "91 instâncias confirmadas", trace.py decode_dc()).
+            r, irang = operands
+            assert r[0] == 'reg'
+            assert irang[0] == 'imm' and 1 <= irang[1] <= 4, "EXTP só aceita irang em [1,4]"
+            b1 = (r[1] << 4) | ((irang[1] - 1) << 2) | 0x1
+            return bytes([0xDC, b1])
 
         if mnemonic == 'RET':
             return bytes([0xCB, 0x00])  # "RET  CB 00" (manual Infineon)
