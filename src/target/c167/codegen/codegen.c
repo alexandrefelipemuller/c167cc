@@ -491,16 +491,39 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
                 char m1[32]; snprintf(m1, sizeof(m1), "%s, #1", d); emit_raw(cg, NULL, "MOV", m1, NULL);
                 emit_raw(cg, le, NULL, NULL, NULL);
             } else { /* OP_ASSIGN: cast */
-                if (i->size == 2) {
-                    const char *mn = i->is_signed ? "MOVBS" : "MOVBZ";
-                    /* widening from byte source is only meaningful when the source was byte-sized;
-                       for same-size casts, a plain MOV suffices. */
+                /* Achado 05/09/2026 (ver o comentário grande em
+                   ir_build.c/EXPR_CAST): isto costumava tentar usar
+                   MOVBS/MOVBZ (nunca implementadas de verdade no
+                   assembler/encoder - MOVBS não tem nem case em
+                   c166asm.py's encode(), e MOVBZ só aceita 'breg'/mem como
+                   origem, não um registrador de palavra puro como `a`
+                   sempre é aqui) e depois IGNORAVA o mnemônico escolhido
+                   (`(void)mn`), emitindo sempre um MOV puro - ou seja,
+                   widening de byte->word SEMPRE zero-estendia, mesmo
+                   quando o tipo de ORIGEM era assinado (bug real:
+                   `(int16_t)(int8_t)x` com x>=0x80 virava um número
+                   positivo em vez de negativo). `a` aqui já é um
+                   registrador de PALAVRA com o byte de origem
+                   zero-estendido no byte baixo (é assim que todo load de
+                   8 bits deste backend funciona - ver IR_LOAD_SYM/
+                   IR_LOAD_MEM acima) - pra sign-extend sem depender de
+                   MOVBS, usa o truque padrão SHL #8 / ASHR #8 (desloca o
+                   byte de origem pro byte alto e puxa de volta com
+                   replicação de sinal), só quando a origem for de fato de
+                   1 byte E assinada (i->imm/i->b, ver ir_build.c); origem
+                   unsigned ou já do mesmo tamanho do destino continua um
+                   MOV direto (comportamento já correto antes deste
+                   fix). */
+                int narrow_signed_source = (i->size == 2 && (i->imm & 0xFF) == 1 && (i->imm & 0x100));
+                if (strcmp(a, d) != 0) {
                     char ops[48]; snprintf(ops, sizeof(ops), "%s, %s", d, a);
-                    emit_raw(cg, NULL, strcmp(a, d) ? "MOV" : "MOV", ops, NULL);
-                    (void)mn;
-                } else {
-                    char ops[48]; snprintf(ops, sizeof(ops), "%s, %s", d, a);
-                    if (strcmp(a, d) != 0) emit_raw(cg, NULL, "MOV", ops, NULL);
+                    emit_raw(cg, NULL, "MOV", ops, NULL);
+                }
+                if (narrow_signed_source) {
+                    char shl[32]; snprintf(shl, sizeof(shl), "%s, #8", d);
+                    emit_raw(cg, NULL, "SHL", shl, "sign-extend byte->word: shift byte to high half");
+                    char ashr[32]; snprintf(ashr, sizeof(ashr), "%s, #8", d);
+                    emit_raw(cg, NULL, "ASHR", ashr, "...then arithmetic-shift back, replicating the sign bit");
                 }
             }
             finish_dst(cg, i->dst);

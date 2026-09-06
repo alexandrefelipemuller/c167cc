@@ -6,6 +6,69 @@ assembly > optimization**.
 
 ## Fixed bugs (kept here for history)
 
+- **Signed byte->word cast (`(int16_t)(int8_t)x`) silently zero-extended
+  instead of sign-extending** (found 05/09/2026, cross-checking a
+  multi-function real firmware routine — `rotina_validador_sensor_32d1e`
+  — in the sibling Sirius32 project; see that project's
+  `research/sensores_atuadores/DUVIDAS.md`, "Rodada seguinte
+  (05/09/2026)", for the original investigation that first hit this as an
+  apparently context-dependent "isolated call works, full program
+  doesn't" divergence before it was tracked down to this, a plain
+  compile-time miscompilation with no dependency on program size at all).
+  Two independent bugs stacked to produce this:
+  1. `IR_UNOP`/`OP_ASSIGN` (`EXPR_CAST` in `src/ir/ir_build.c`) codegen
+     (`src/target/c167/codegen/codegen.c`) computed the right mnemonic
+     (`MOVBS` for a signed narrow-to-wide cast, `MOVBZ` otherwise) into a
+     local `mn` variable, then **never used it** (`(void)mn;`) - it always
+     emitted a plain `MOV`, which just copies the 16-bit vreg unchanged.
+     Moot anyway: neither `MOVBS` nor `MOVBZ` were actually usable as
+     written - `c166asm.py`'s encoder has no case for `MOVBS` at all, and
+     its `MOVBZ` case only accepts a byte-register (`breg`) or memory
+     source, never the plain word-register name this codegen always
+     passes as `a`.
+  2. Independently, `ir_optimize()`'s copy-propagation pass
+     (`src/optimizer/optimizer.c`) treated **every** `IR_UNOP`/`OP_ASSIGN`
+     (i.e. every cast, of any combination of sizes/signs) as a value-
+     preserving alias for propagation and constant-folding purposes. A
+     widening signed-byte cast is not a bit-preserving copy (that's
+     exactly the point of sign extension), so even after fixing (1), the
+     cast instruction itself could be aliased away entirely before ever
+     reaching codegen, silently reintroducing the same bug from a
+     different layer.
+  Root cause of why this was so hard to pin down originally: an
+  `IR_UNOP`/`OP_ASSIGN` had no record of the cast's *source* size/sign,
+  only the destination's (`i->size`/`i->is_signed`) — nothing at codegen
+  or optimizer time could tell "widen from an already-8-bit value" apart
+  from "reinterpret a same-width value", so neither layer could special-
+  case the one combination (signed byte -> word) that actually needs real
+  extension work. Fixed by recording the cast's source size and
+  signedness on the instruction itself (`i->imm`, low byte = source size
+  in bytes, bit `0x100` = source signedness — deliberately NOT `i->b`,
+  which the optimizer's generic alias-resolution pass treats as a vreg id
+  for every instruction kind and would silently corrupt if repurposed as
+  a plain flag), then: codegen emits `MOV` + `SHL #8` + `ASHR #8` (shift
+  the byte into the high half and arithmetic-shift back, replicating the
+  sign bit — instructions already fully supported by the real
+  assembler/simulator, unlike the dead `MOVBS`/`MOVBZ` path) only for
+  that one shape, and the optimizer skips both alias-propagation and
+  applies the correct truncate+extend when constant-folding a cast in
+  that same shape, leaving every other cast (same-size, unsigned-source,
+  narrowing) as the cheap pure-copy it already correctly was. Verified:
+  new `examples/signext_byte_global.c` / `sim-signext_byte_global` test
+  (`IN=200` i.e. byte `0xC8`, bit 7 set — `(int16_t)(int8_t)200` must be
+  `-56`, not `200`); a from-scratch minimal reproduction of the original
+  multi-function routine (5 small `combinar()`-shaped helper functions
+  plus a driver, assembled and simulated through the REAL calling
+  convention — `scripts/compilar_e_montar.py` in the sibling Sirius32
+  project, not the flattened single-function `tests/port_to_toy_asm.py`
+  harness this compiler's own `sim-*` tests use, which never exercises
+  real `[R15+#N]`-framed multi-function `CALLA` programs) went from 8/11
+  to 11/11 matching test cases against a Python reference once this fix
+  landed, using the *unmodified* `(int8_t)`/`(int16_t)` cast directly
+  instead of the bit-test workaround the original session had used;
+  `meson test` unchanged at 17/18 (same pre-existing, unrelated
+  `sim-calculate_global` failure) plus the 1 new test, so 18/19 overall.
+
 - **Silent label truncation in `IR_JMP`/`IR_CJMP` codegen** (found
   02/09/2026, integrating with the sibling `Sirius32/` project — a
   regression suite there compares every compiled leaf routine's simulated

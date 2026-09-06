@@ -2,6 +2,37 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Achado 05/09/2026 (mesmo bug documentado em ir_build.c/EXPR_CAST e
+   codegen.c/IR_UNOP-OP_ASSIGN): um cast de byte->word ASSINADO
+   (`(int16_t)(int8_t)x` e afins) muda o valor de verdade quando o byte de
+   origem tem o bit 7 setado - não é uma cópia pura. `imm`/`b` num
+   IR_UNOP/OP_ASSIGN carregam o tamanho e o sinal do tipo de ORIGEM (ver
+   ir_build.c) - usado tanto pra decidir alias-propagation abaixo quanto
+   pra fazer o constant-fold desse cast corretamente, em vez de só copiar
+   o valor cru como se byte->word nunca precisasse de sign-extension. */
+static long apply_cast_value(long v, int src_size, int src_signed) {
+    if (src_size == 1) {
+        v &= 0xFF;
+        if (src_signed && (v & 0x80)) v |= 0xFF00;
+    }
+    return v & 0xFFFF;
+}
+
+/* i->imm em IR_UNOP/OP_ASSIGN carrega tamanho (bits baixos) + sinal (bit
+   0x100) do tipo de ORIGEM - ver o comentário grande em ir_build.c. */
+static int cast_src_size(IrInst *i) { return (int)(i->imm & 0xFF); }
+static int cast_src_signed(IrInst *i) { return (i->imm & 0x100) != 0; }
+
+/* Um IR_UNOP/OP_ASSIGN só é uma cópia pura (segura pra alias-propagation
+   E pra constant-fold via cast_needs_no_op abaixo) quando byte->word não
+   está em jogo - só o único caso de verdade problemático hoje (os outros
+   casts - word->word, ou estreitamento byte<-word - já preservam o valor
+   como cópia crua no codegen atual, ver o comentário grande em
+   codegen.c). */
+static int cast_is_pure_copy(IrInst *i) {
+    return !(i->size == 2 && cast_src_size(i) == 1 && cast_src_signed(i));
+}
+
 static long apply_binop(OpKind op, long a, long b) {
     switch (op) {
         case OP_ADD: return a + b;
@@ -63,8 +94,9 @@ static void optimize_func(IrFunc *fn) {
                     is_const[i->dst] = 0;
                 }
                 break;
-            case IR_UNOP:
-                if (i->op == OP_ASSIGN && !multi_def[i->dst] && i->a >= 0) {
+            case IR_UNOP: {
+                int pure_copy = (i->op != OP_ASSIGN) || cast_is_pure_copy(i);
+                if (i->op == OP_ASSIGN && pure_copy && !multi_def[i->dst] && i->a >= 0) {
                     alias[i->dst] = i->a; /* cast pass-through as copy for propagation purposes */
                 }
                 if (i->a >= 0 && is_const[i->a] && !multi_def[i->dst]) {
@@ -72,11 +104,16 @@ static void optimize_func(IrFunc *fn) {
                     if (i->op == OP_NEG) r = -v;
                     else if (i->op == OP_BNOT) r = ~v;
                     else if (i->op == OP_NOT) r = !v;
-                    else if (i->op == OP_ASSIGN) r = v;
+                    else if (i->op == OP_ASSIGN) r = pure_copy ? v : apply_cast_value(v, cast_src_size(i), cast_src_signed(i));
+                    /* note: i->imm is overwritten below (becomes the folded
+                       constant) - already consumed via apply_cast_value above,
+                       nothing else in this function reads it as "source size"
+                       again after this point for this instruction. */
                     i->kind = IR_CONST; i->imm = r; i->a = -1;
                     is_const[i->dst] = 1; cval[i->dst] = r;
                 }
                 break;
+            }
             case IR_MOV:
                 if (!multi_def[i->dst] && i->a >= 0) {
                     alias[i->dst] = i->a;

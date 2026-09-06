@@ -444,6 +444,27 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
             IrInst *i = emit(b, IR_UNOP);
             i->dst = new_vreg(b); i->op = OP_ASSIGN; i->a = v;
             i->size = type_bytes(e->cast_type); i->is_signed = type_is_signed(e->cast_type);
+            /* Achado 05/09/2026 (bug real de miscompilação, encontrado
+               investigando uma divergência de `combinar()`/`termo_final`
+               na Sirius32 - ver research/sensores_atuadores/DUVIDAS.md):
+               `i->is_signed` acima é o sinal do tipo DE DESTINO, mas
+               widening byte->word (`(int16_t)(int8_t)x`) precisa saber o
+               sinal do tipo de ORIGEM pra decidir entre sign-extend e
+               zero-extend - `(int16_t)(uint8_t)x` deve zero-estender
+               mesmo com destino signed, e `(uint16_t)(int8_t)x` deve
+               SIGN-estender apesar do destino ser unsigned (é isso que
+               `research/sensores_atuadores/32d1e_...` faz: reinterpreta o
+               byte assinado de volta pra uint16_t só pra somar depois).
+               `imm` não é usado por IR_UNOP/OP_ASSIGN - reaproveita pra
+               carregar o tamanho (bits baixos) e o sinal (bit 8) do tipo
+               de ORIGEM até o codegen/otimizador (ver IR_UNOP/OP_ASSIGN
+               em codegen.c e optimizer.c). NÃO usar `i->b` pra isso -
+               achado nesta mesma sessão: `i->b`/`i->a` são resolvidos
+               genericamente pela cadeia de alias do otimizador pra TODA
+               instrução (são sempre "id de vreg, -1 se não usado") -
+               guardar uma flag 0/1 ali faz o otimizador confundir 0/1 com
+               vreg de verdade e reescrever silenciosamente. */
+            i->imm = type_bytes(srcty) | (type_is_signed(srcty) ? 0x100 : 0);
             i->loc = e->loc;
             *out_type = e->cast_type;
             return i->dst;
