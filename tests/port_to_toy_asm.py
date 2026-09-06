@@ -63,7 +63,16 @@ def port(asm_text: str, func_label: str) -> str:
         code = re.sub(r"\.L(\w+)", r"L\1", code)
         out.append(code)
 
-    out.append("NOP")
+    # c166sim.py no longer treats NOP as "end of program" (that heuristic was
+    # removed 20/08/2026, see ../simulador/README.md "Conserto do heurística
+    # NOP" - NOP is now a real 2-byte no-op instruction). A bare trailing NOP
+    # here made execution fall off the end into the variable/data area and
+    # execute garbage bytes as opcodes, eventually landing on an unsupported
+    # or SFR-clobbering opcode. Use the same self-referential-loop halt
+    # convention c166sim.py's `run()` actually detects (pc stuck for
+    # _HALT_THRESHOLD steps).
+    out.append("PORT_HALT:")
+    out.append("JMPR cc_UC, PORT_HALT")
     return "\n".join(out) + "\n"
 
 
