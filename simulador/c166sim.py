@@ -1085,6 +1085,14 @@ class Sim:
             self.pc += 4
             return True
 
+        if op == 0xA5:  # DISWDT - desabilita o watchdog (manual §13.1); no-op no
+                        # simulador, mesma família de EINIT/SRST acima (não afeta
+                        # memória/flags, só um bit de hardware que não modelamos) -
+                        # achado rodando o boot dos exemplos Keil I2CMaster/I2CSlave
+                        # (chamado logo no início do startup gerado pelo compilador)
+            self.pc += 4
+            return True
+
         if op == 0x5C:  # SHL Rw,#data4 - medido: ~3,3% de todas as instruções
             b = self.mem[pc + 1]
             d, sh = b & 0xF, (b >> 4) & 0xF
@@ -1336,6 +1344,30 @@ class Sim:
                 self.set_special(MDH_ADDR, (mdl % divisor) & 0xFFFF)
                 self.flags['V'] = False
                 self.flags['C'] = False
+            self.pc += 2
+            return True
+
+        if op == 0x0C:  # ROL Rw,Rw - achado rodando RTX_EX1 (Keil), mesmo padrão
+                        # nibble alto=dest/baixo=fonte da contagem já usado em
+                        # SHL/SHR/ASHR Rw,Rw acima
+            b = self.mem[pc + 1]
+            d, s = (b >> 4) & 0xF, b & 0xF
+            self.r[d] = self._rotate(self.r[d], self.r[s] & 0xF, 'ROL')
+            self.pc += 2
+            return True
+
+        if op == 0x1C:  # ROL Rw,#data4 (mesma convenção Rwd4 de SHL/SHR/ASHR/ROR
+                        # imediato: nibble alto=imediato, baixo=reg)
+            b = self.mem[pc + 1]
+            d, sh = b & 0xF, (b >> 4) & 0xF
+            self.r[d] = self._rotate(self.r[d], sh, 'ROL')
+            self.pc += 2
+            return True
+
+        if op == 0x2C:  # ROR Rw,Rw
+            b = self.mem[pc + 1]
+            d, s = (b >> 4) & 0xF, b & 0xF
+            self.r[d] = self._rotate(self.r[d], self.r[s] & 0xF, 'ROR')
             self.pc += 2
             return True
 
