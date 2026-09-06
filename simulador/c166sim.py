@@ -1202,6 +1202,18 @@ class Sim:
             self.pc += 2
             return True
 
+        if op == 0x31:  # SUBCB Rbn,Rbm (subtração byte com borrow de entrada) -
+                        # achado rodando o exemplo Traffic da suíte Keil
+            b = self.mem[pc + 1]
+            dnib, snib = (b >> 4) & 0xF, b & 0xF
+            a, bb = self.get_breg(dnib), self.get_breg(snib)
+            cin = 1 if self.flags['C'] else 0
+            res = a - bb - cin
+            self.update_flags_sub(a, bb + cin, res, width=8)
+            self.set_breg(dnib, res & 0xFF)
+            self.pc += 2
+            return True
+
         if op == 0x20:  # SUB Rw,Rw
             b = self.mem[pc + 1]
             d, s = (b >> 4) & 0xF, b & 0xF
