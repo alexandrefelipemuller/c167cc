@@ -6,6 +6,81 @@ assembly > optimization**.
 
 ## Fixed bugs (kept here for history)
 
+- **Loading a `int8_t` (or other signed 1-byte) symbol - parameter, local,
+  or global - always zero-extended instead of sign-extending, so
+  `if (x < 0)` was never true even for a genuinely negative value**
+  (found 07/09/2026, in a post-mortem audit of the "register allocator/
+  liveness across a call" fix below - see the sibling Sirius32 project's
+  `docs/AUDITORIA_REGALLOC_FIX.md`, section "2.". That audit re-derived
+  the original `rotina_validador_sensor_32d1e` divergence from first
+  principles and found this THIRD, independent bug while confirming the
+  other two fixes were sufficient - it wasn't; production code
+  (`core/aritmetica/biblioteca_aritmetica_enderecos.c`,
+  `biblioteca_aritmetica_soma_saturada_byte_delta_signed_3b7fe`) had been
+  working around this exact bug for a while by avoiding an `int8_t`
+  parameter entirely: the caller manually sign-extends into a
+  `uint16_t` and the callee tests a bit (`& 0x0080`) instead of doing a
+  signed comparison - which is what proved the bug was in the parameter
+  reload path specifically, not in comparison codegen itself
+  (`&`/bitwise tests always worked).
+  **Root cause**: `IR_LOAD_SYM` in `src/target/c167/codegen/codegen.c`
+  loads any 1-byte symbol (`SYM_LOCAL`/`SYM_PARAM` via `[R15+#N]`, or a
+  named global) with `MOVB`, which - like every other byte-load form in
+  this backend (see the `IR_LOAD_MEM`/`IR_FARREAD8_SYM` comments just
+  above/below it) - only ever touches the destination's low byte; the
+  high byte is left with whatever garbage was there before. The existing
+  fix for that (found 21/08/2026, same file) was an unconditional
+  `AND dst, #0x00FF` right after the `MOVB`, which zero-extends
+  correctly for an unsigned byte but was applied unconditionally,
+  clobbering the sign of a genuinely negative `int8_t`/other signed byte
+  before any later comparison or arithmetic ever saw it. This is the
+  same species of bug as the signed cast bug below (byte value gets
+  stuck zero-extended because the code that's supposed to widen it
+  doesn't look at the source type's signedness) but a different code
+  path: a cast in an expression (`(int16_t)(int8_t)x`) versus loading a
+  symbol straight out of the stack frame or a named global - the cast
+  fix (`a3f83d9`) did not, and could not, cover this, since a plain
+  `if (delta < 0)` on an `int8_t` parameter/local/global involves no
+  cast expression at all in the IR.
+  **Fix**: `IR_LOAD_SYM`'s 1-byte case now checks `i->is_signed`
+  (already carried on the instruction, set from `type_is_signed(sym->
+  type)` in `src/ir/ir_build.c`, previously computed but unused here):
+  when true, it replaces `AND dst, #0x00FF` with the same `SHL dst, #8`
+  / `ASHR dst, #8` sign-extend trick used by the cast fix (shifts the
+  loaded byte into the high byte, then an arithmetic shift right
+  replicates the sign bit back down) instead of the plain zero-extending
+  `AND`. Unsigned 1-byte symbols are untouched - they keep the original
+  `AND dst, #0x00FF`. The identical bug was also present, and fixed the
+  same way, in `IR_LOAD_MEM` (pointer dereference of a signed byte type,
+  e.g. `int8_t *p; ... *p < 0`) right next to it, since it shares the
+  exact same `MOVB`-only-touches-low-byte problem and already carries
+  `i->is_signed` too. `IR_FARREAD8_SYM` (`@ram`/`@far` byte read) was
+  left as-is: it does not currently carry a signedness flag on the
+  instruction at all, so fixing it would need IR plumbing beyond the
+  scope of this fix - it remains a known gap, not yet observed in a real
+  routine.
+  **Validation**: reproduced first with a minimal example
+  (`examples/sign_param_signed_compare_global.c` - a global `int8_t`
+  compared with `< 0`, since the toy simulator harness
+  (`tests/sim_validate.sh`/`port_to_toy_asm.py`) cannot exercise a real
+  function call/parameter - see `docs/limitations.md`'s Validation
+  section - but the buggy code path is identical for `SYM_PARAM`,
+  `SYM_LOCAL`, and a named global, all going through the same
+  `IR_LOAD_SYM` case): confirmed via `--dump-asm` that the pre-fix
+  output emitted `AND R0, #0x00FF` right after the `MOVB` reload, and
+  that `sim-sign_param_signed_compare_global` (new `meson test` case,
+  `IN_S8=140` i.e. `0x8C`/-116, expects `OUT=1`) failed before the fix
+  and passes after it; a companion manual check
+  (`uint8_t` loaded and cast to `uint16_t`) confirms the unsigned path
+  still emits the original `AND #0x00FF` unchanged. `meson test`:
+  21/21 -> 22/22, no regressions. The real-world case that motivated
+  this (`biblioteca_aritmetica_soma_saturada_byte_delta_signed_3b7fe`,
+  file `0x3B7FE`) was then simplified in the Sirius32 project to use a
+  natural `int8_t delta` parameter with a direct `if (delta < 0)`,
+  recompiled with the fixed `c167cc`, and revalidated against the
+  original firmware's numeric output - see that project's own
+  `docs/AUDITORIA_REGALLOC_FIX.md` for the outcome.
+
 - **Register allocator never spilled a value that lives across a function
   call, so it could land in a register the call itself destroys** (found
   06/09/2026, in the sibling Sirius32 project's continued investigation

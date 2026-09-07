@@ -230,9 +230,30 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
             if (i->size == 1) {
                 /* mesmo bug/fix do IR_LOAD_MEM acima (achado 21/08/2026
                    compilando dtc_sirius32.c): MOVB só toca o byte baixo,
-                   byte alto fica com lixo - zero-estende sempre. */
-                char ops2[48]; snprintf(ops2, sizeof(ops2), "%s, #0x00FF", d);
-                emit_raw(cg, NULL, "AND", ops2, NULL);
+                   byte alto fica com lixo - precisa ser explicitamente
+                   estendido. Achado 07/09/2026 (auditoria pós regalloc-fix,
+                   docs/AUDITORIA_REGALLOC_FIX.md secao 2): isto SEMPRE
+                   zero-estendia (AND #0x00FF), mesmo quando i->sym->type era
+                   um `int8_t` (ou outro tipo assinado de 1 byte) - reload de
+                   PARÂMETRO/local `int8_t` do frame ([R15+#N]) pra um
+                   registrador, seguido de comparação assinada
+                   (`if (delta < 0)`), nunca via valor negativo porque o byte
+                   alto do registrador já tinha sido forçado a 0 aqui, antes
+                   mesmo da comparação rodar. Mesma classe do bug de
+                   sign-extend de CAST corrigido em a3f83d9, caminho de
+                   código diferente (load de símbolo do frame, não cast em
+                   expressão). Fix: usa o mesmo truque SHL #8 / ASHR #8 (via
+                   byte alto, replicando o bit de sinal) quando `i->is_signed`
+                   for verdadeiro; `uint8_t`/tipos sem sinal continuam com o
+                   AND #0x00FF (zero-extend) de sempre. */
+                if (i->is_signed) {
+                    char ops2[48]; snprintf(ops2, sizeof(ops2), "%s, #8", d);
+                    emit_raw(cg, NULL, "SHL", ops2, "sign-extend: byte to high byte");
+                    emit_raw(cg, NULL, "ASHR", ops2, "sign-extend: replicate sign bit back down");
+                } else {
+                    char ops2[48]; snprintf(ops2, sizeof(ops2), "%s, #0x00FF", d);
+                    emit_raw(cg, NULL, "AND", ops2, NULL);
+                }
             }
             finish_dst(cg, i->dst);
             break;
@@ -434,7 +455,20 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
                    QUALQUER registrador de destino (diferente de um alias
                    de byte RLn/RHn, que só existe pra R0-R7 - o pool de
                    temporários usa R8-R10 também, e o rascunho de spill
-                   R11/R12, nenhum dos quais tem esse alias). */
+                   R11/R12, nenhum dos quais tem esse alias).
+
+                   Achado 07/09/2026 junto do bug irmão em IR_LOAD_SYM (ver
+                   comentário lá): esse zero-extend uniforme está certo pra
+                   ponteiro de origem unsigned, mas errado quando o tipo
+                   apontado é assinado de 1 byte (`int8_t *p; ... *p < 0`) -
+                   mesmo fix: SHL #8 / ASHR #8 quando `i->is_signed`. */
+                if (i->is_signed) {
+                    char ops2[48]; snprintf(ops2, sizeof(ops2), "%s, #8", d);
+                    emit_raw(cg, NULL, "SHL", ops2, "sign-extend: byte to high byte");
+                    emit_raw(cg, NULL, "ASHR", ops2, "sign-extend: replicate sign bit back down");
+                    finish_dst(cg, i->dst);
+                    break;
+                }
                 char ops2[48]; snprintf(ops2, sizeof(ops2), "%s, #0x00FF", d);
                 emit_raw(cg, NULL, "AND", ops2, NULL);
             }
