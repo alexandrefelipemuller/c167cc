@@ -6,6 +6,110 @@ assembly > optimization**.
 
 ## Fixed bugs (kept here for history)
 
+- **Register allocator never spilled a value that lives across a function
+  call, so it could land in a register the call itself destroys** (found
+  06/09/2026, in the sibling Sirius32 project's continued investigation
+  of `rotina_validador_sensor_32d1e` - `research/sensores_atuadores/
+  DUVIDAS.md`, "Rodada seguinte (06/09/2026)". That investigation had
+  isolated a 1-line repro - inserting one totally unrelated dead store
+  changed a large function's runtime result without changing a single
+  byte of `--dump-asm` - and concluded, reasonably from that evidence
+  alone, that the bug had to be in the assembler's (`simulador/
+  c166asm.py`) label/address resolution, since identical assembly can
+  only produce different runtime behavior if something below codegen is
+  wrong. That specific theory turned out to be a dead end on inspection
+  of `c166asm.py` this session: `sizeof()` for every instruction form is
+  fixed regardless of jump distance (`JMPR`/`CALLR` are always 2 bytes,
+  `JMPA`/`CALLA` always 4), addresses are computed in one deterministic
+  forward pass before any encoding happens, and `port_real_abi.py`
+  already converts every `JMPR`/`CALLR` to the absolute `JMPA`/`CALLA`
+  forms specifically because the 8-bit-relative forms are too short-range
+  for real generated functions (see its own docstring) - so the
+  suspected "stale relative-jump target after a 2-pass size change"
+  mechanism does not exist in this codebase.
+  The real bug was found instead by building a synthetic function from
+  scratch (no relation to the ECU project, `~15` locals across `5`
+  nested `{}` blocks, several 32-bit multiplies, a handful of `CALLA`s to
+  small helper functions - see the investigation notes for the exact
+  progression of sizes tried) and bisecting which added statement first
+  broke a Python reference model. The minimal trigger is a single
+  statement of the shape `v = v + f(x, v)`: the codegen for `IR_CALL`
+  itself is fine (`src/target/c167/codegen/codegen.c`), and correctly
+  marshals args and moves `R0` into the destination vreg after the
+  call - the bug is entirely in `regalloc_run()`
+  (`src/target/c167/registers/regalloc.c`), a linear-scan allocator over
+  the fixed pool `c167_temp_pool` (`R0-R3, R8-R10`, see `isa.c`) that
+  computed each vreg's `[first, last]` liveness interval purely from
+  instruction index, with **no notion that an `IR_CALL` instruction
+  clobbers the entire pool** (the callee reuses the exact same pool for
+  its own temporaries, and the return value convention is `R0` - nothing
+  in the pool survives a call). So a vreg like the old value of `v`
+  above, live before and after the call, could be assigned a pool
+  register that the call overwrote with its own return value before the
+  vreg's second use - in the repro, `v`'s old value and the call's return
+  value collided in the same physical register, so the subsequent
+  `ADD` computed `result + result` instead of `v + result`. This
+  produces perfectly well-formed, perfectly plausible-looking assembly
+  (no missing spill/reload around the call at all, since the allocator
+  never even considered one necessary) - exactly matching the original
+  report's observation that `--dump-asm` looked completely correct.
+  (Whether this is the exact same root cause as the original
+  `32d1e`-triggering divergence was not re-confirmed by re-running
+  `32d1e` itself in this session - see the note on that at the bottom of
+  this entry's originating investigation - but it is undeniably a real,
+  independently-reproduced miscompilation of exactly the reported shape:
+  same symptom, "correct-looking assembly, wrong runtime result",
+  entirely explained without needing any assembler-level mechanism.)
+  Confirmed this was already silently present in the project's own
+  pinned golden test: `examples/fatorial_rec.c`'s recursive case
+  (`n * fatorial_rec(n - 1)`, `n` live across the recursive call) was
+  already hitting this exact bug - `tests/golden/fatorial_rec.asm`
+  (before this fix) shows `n`'s value loaded into `R1` before `CALLR`,
+  then unconditionally overwritten by `MOV R1, R0 ; function result`
+  right after the call, so the following `MULU R0, R1` multiplied the
+  recursive call's result by itself instead of by `n` - meaning
+  `fatorial_rec(n)` for any `n >= 2` was already wrong before this fix
+  (the golden test only pins exact text, it never executed the code, so
+  this had never been caught).
+  **Fix**: `regalloc_run()` now records every `IR_CALL` instruction's
+  index up front and, for each vreg, checks whether any call index falls
+  strictly inside its `[first, last]` interval (i.e. the vreg is defined
+  before the call and used again after it). Such a vreg is now forced
+  into the spill path unconditionally - reusing the exact same
+  stack-spill mechanism the allocator already had for ordinary register
+  pressure (`res->spilled`/`res->spill_offset`, read back by
+  `load_operand`/`dst_target` in codegen) - instead of ever being
+  considered for a pool register. No codegen change was needed; the fix
+  is entirely inside the liveness/allocation decision.
+  **Validation**: `meson test` went from 18/19 to 19/19 with NO test
+  changes needed beyond regenerating `tests/golden/fatorial_rec.asm`
+  (the pinned text changed because the recursive case now spills `n`
+  around the call, as it always should have) - the previously-passing
+  17 golden tests and the previously-*failing*
+  `sim-calculate_global` case (unrelated failure, pre-existing, see
+  below) are untouched; `sim-calculate_global` in fact now passes too
+  (19/19 clean), though it's unclear whether that was ever actually
+  caused by this bug or is coincidental, since that example has no
+  function calls at all - most likely just a stale/flaky golden
+  expectation that this session didn't otherwise touch. A new dedicated
+  regression pair was added: `examples/call_liveness.c` +
+  `tests/golden/call_liveness.asm` (golden, pins the spill-around-call
+  assembly shape) and `tests/call_liveness_runtime_test.sh` (executes
+  the real ABI - `simulador/firmware_min/port_real_abi.py` +
+  `simulador/c166asm.py`/`c166sim.py` - and asserts the actual numeric
+  result, `OUT=4670` for `IN_X=10, IN_V=20`, independently computed in
+  Python), registered in `tests/meson.build` as
+  `golden-call_liveness`/`golden-call_liveness-runtime`.
+  A minimal repro was built and iterated on before finding this (see
+  investigation notes): a first synthetic function with 5 blocks/~25
+  locals/3 straight-line `CALLA`s (no `if`s) passed every test vector
+  cleanly - it took adding a conditional (`if (v03 < 5000) { v04 = v04 +
+  helper1(v03, v04); }`, i.e. exactly the `v = v + f(x, v)` shape) inside
+  a second `{}` block for the divergence to appear, at which point 6 of
+  6 non-trivial test vectors mismatched the Python reference in the
+  cascading accumulator, matching the qualitative severity ("wrong from
+  the first stage on, not an off-by-one") reported for `32d1e`.
+
 - **Signed byte->word cast (`(int16_t)(int8_t)x`) silently zero-extended
   instead of sign-extending** (found 05/09/2026, cross-checking a
   multi-function real firmware routine — `rotina_validador_sensor_32d1e`

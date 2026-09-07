@@ -7,7 +7,7 @@
 
 fatorial_rec:
 	PUSH     R15                 ; save caller's frame pointer
-	SUB      SP, #2              ; allocate locals + spills
+	SUB      SP, #4              ; allocate locals + spills
 	MOV      R15, SP             ; establish frame pointer
 	MOV      [R15+#0], R4        ; spill incoming parameter 'n'
 	; source: examples/fatorial_rec.c:3
@@ -27,23 +27,24 @@ fatorial_rec:
 .Lfatorial_rec_if_then_0:
 	; source: examples/fatorial_rec.c:4
 	MOV      R0, #1              
-	ADD      SP, #2              ; release locals + spills
+	ADD      SP, #4              ; release locals + spills
 	POP      R15                 ; restore caller's frame pointer
 	RET                          
 .Lfatorial_rec_if_end_2:
 	; source: examples/fatorial_rec.c:5
+	MOV      R11, [R15+#0]       ; R11 = n
+	MOV      [R15+#2], R11       
 	MOV      R0, [R15+#0]        ; R0 = n
-	MOV      R1, [R15+#0]        ; R1 = n
-	MOV      R2, #1              
-	MOV      R3, R1              
-	SUB      R3, R2              
-	MOV      R4, R3              
+	MOV      R1, #1              
+	MOV      R2, R0              
+	SUB      R2, R1              
+	MOV      R4, R2              
 	CALLR    fatorial_rec        
-	MOV      R1, R0              ; function result
-	MULU     R0, R1              
-	MOV      R2, MDL             ; low word of MDL:MDH product
-	MOV      R0, R2              ; return value
-	ADD      SP, #2              ; release locals + spills
+	MOV      R11, [R15+#2]       ; reload spilled value
+	MULU     R11, R0             
+	MOV      R1, MDL             ; low word of MDL:MDH product
+	MOV      R0, R1              ; return value
+	ADD      SP, #4              ; release locals + spills
 	POP      R15                 ; restore caller's frame pointer
 	RET                          
 

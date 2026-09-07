@@ -12,6 +12,7 @@ golden_examples = [
   'union_basic',
   'funcptr_basic',
   'farread_global',
+  'call_liveness',
 ]
 
 foreach name : golden_examples
@@ -65,4 +66,15 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
       args : [c167cc_exe.full_path(), meson.source_root() / c[1], c[0]] + c[2] + ['--'] + c[3],
       workdir : meson.source_root())
   endforeach
+
+  # Regressão em nível de execução (não só texto pinado) pro bug de
+  # 06/09/2026 de "valor vivo através de chamada" - ver
+  # tests/call_liveness_runtime_test.sh e examples/call_liveness.c.
+  # Usa a ABI real (port_real_abi.py), não o harness "toy" acima (que não
+  # suporta CALLR), porque o bug só se manifesta com uma chamada de
+  # verdade.
+  test('golden-call_liveness-runtime',
+    find_program('call_liveness_runtime_test.sh'),
+    args : [c167cc_exe.full_path()],
+    workdir : meson.source_root())
 endif
