@@ -60,6 +60,15 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
     ['div32_global', 'examples/div32_global.c', ['A=1234', 'B=777'], ['QUOC=9588', 'REM=18']],
     ['signext_byte_global', 'examples/signext_byte_global.c', ['IN=200'], ['OUT=-56']],
     ['sign_param_signed_compare_global', 'examples/sign_param_signed_compare_global.c', ['IN_S8=140'], ['OUT=1']],
+    # Achado 07/09/2026 (4º bug de cast desta sessão, ver docs/limitations.md/
+    # "Fixed bugs"): estreitamento (uint16_t->uint8_t) usado DENTRO de uma
+    # expressão maior (não como store final direto) perdia o truncamento por
+    # completo - `A + B - (uint8_t)B` virava `A + B - B` porque o otimizador
+    # tratava o cast como cópia pura e o codegen não emitia AND #0x00FF/
+    # sign-extend algum pro caso de destino de 1 byte. B=511 (> 0xFF) só passa
+    # se o truncamento de fato acontecer: (uint8_t)511 == 255, então
+    # 10 + 511 - 255 == 266; com o bug dava 10 + 511 - 511 == 10.
+    ['narrowing_cast_in_expr_global', 'examples/narrowing_cast_in_expr_global.c', ['A=10', 'B=511'], ['OUT=266']],
   ]
   foreach c : sim_cases
     test('sim-' + c[0],

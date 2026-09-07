@@ -10,10 +10,26 @@
    ir_build.c) - usado tanto pra decidir alias-propagation abaixo quanto
    pra fazer o constant-fold desse cast corretamente, em vez de só copiar
    o valor cru como se byte->word nunca precisasse de sign-extension. */
-static long apply_cast_value(long v, int src_size, int src_signed) {
+/* Achado 07/09/2026 (4º bug de cast desta sessão, ver
+   docs/limitations.md/"Fixed bugs"): faltava o passo de ESTREITAMENTO
+   (`uint16_t`->`uint8_t` e afins) aqui - a função só reinterpretava o
+   tamanho/sinal de ORIGEM (pro caso byte->word assinado), nunca truncava
+   pro tamanho de DESTINO. `dst_size`/`dst_signed` fazem esse truncamento:
+   quando o destino é de 1 byte, mascara pra 0-255 e, se o tipo de destino
+   for assinado, sign-extende o resultado (replicando o bit 7) - do
+   contrário fica um zero-extend normal. Sem isso, dobrar essa função (só
+   usada no caminho de constant-fold, quando `i->a` já é uma constante
+   conhecida em tempo de compilação) produzia o valor de 16 bits inteiro
+   em vez do valor truncado - exatamente o bug reproduzido em
+   examples/narrowing_cast_in_expr.c. */
+static long apply_cast_value(long v, int src_size, int src_signed, int dst_size, int dst_signed) {
     if (src_size == 1) {
         v &= 0xFF;
         if (src_signed && (v & 0x80)) v |= 0xFF00;
+    }
+    if (dst_size == 1) {
+        v &= 0xFF;
+        if (dst_signed && (v & 0x80)) v |= 0xFF00;
     }
     return v & 0xFFFF;
 }
@@ -30,6 +46,24 @@ static int cast_src_signed(IrInst *i) { return (i->imm & 0x100) != 0; }
    como cópia crua no codegen atual, ver o comentário grande em
    codegen.c). */
 static int cast_is_pure_copy(IrInst *i) {
+    /* Achado 07/09/2026 (4º bug de cast desta sessão - ver
+       docs/limitations.md/"Fixed bugs"): este predicado dizia "cópia
+       pura" (segura pra alias-propagation: instruções que consomem
+       `i->dst` passam a consumir `i->a` direto, e a instrução IR_UNOP em
+       si pode virar código morto) pra QUALQUER estreitamento
+       (`uint16_t`->`uint8_t` e afins, `i->size` aqui é o tamanho de
+       DESTINO em bytes) - só o widening byte->word assinado (comentário
+       original abaixo) estava coberto como caso impuro. Estreitamento
+       É lossy sempre que o valor de origem não cabe no tamanho de
+       destino (`b > 0xFF` truncado pra `uint8_t` vira outro número) -
+       tratá-lo como cópia pura faz o otimizador apagar o truncamento
+       inteiro: uma expressão como `a + acc - (uint8_t)b` virava
+       `a + acc - b` de verdade (o vreg do cast era só um alias do vreg de
+       `b` de 16 bits, nunca mascarado). Reproduzido/corrigido junto do
+       fix em `codegen.c`/`IR_UNOP`-`OP_ASSIGN` (que tinha o mesmo buraco
+       do lado do gerador de código: nenhum `AND #0x00FF`/sign-extend era
+       emitido pra estreitamento). */
+    if (cast_src_size(i) > i->size) return 0; /* estreitamento: pode truncar o valor */
     return !(i->size == 2 && cast_src_size(i) == 1 && cast_src_signed(i));
 }
 
@@ -104,7 +138,7 @@ static void optimize_func(IrFunc *fn) {
                     if (i->op == OP_NEG) r = -v;
                     else if (i->op == OP_BNOT) r = ~v;
                     else if (i->op == OP_NOT) r = !v;
-                    else if (i->op == OP_ASSIGN) r = pure_copy ? v : apply_cast_value(v, cast_src_size(i), cast_src_signed(i));
+                    else if (i->op == OP_ASSIGN) r = pure_copy ? v : apply_cast_value(v, cast_src_size(i), cast_src_signed(i), i->size, i->is_signed);
                     /* note: i->imm is overwritten below (becomes the folded
                        constant) - already consumed via apply_cast_value above,
                        nothing else in this function reads it as "source size"

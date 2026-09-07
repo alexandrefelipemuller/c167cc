@@ -549,6 +549,29 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
                    MOV direto (comportamento já correto antes deste
                    fix). */
                 int narrow_signed_source = (i->size == 2 && (i->imm & 0xFF) == 1 && (i->imm & 0x100));
+                /* Achado 07/09/2026 (4º bug de cast desta sessão - ver
+                   docs/limitations.md/"Fixed bugs"): faltava o caso
+                   inverso do de cima - ESTREITAMENTO (`i->size == 1`,
+                   destino de 1 byte, ex. `(uint8_t)b` com `b` de 16 bits)
+                   usado dentro de uma expressão maior (não como store
+                   final direto pra memória - esse caso já funcionava,
+                   porque `MOVB`/o STORE de 1 byte só grava o byte baixo,
+                   truncando na prática mesmo sem ajuda daqui). Sem
+                   nenhuma máscara aqui, o `MOV d,a` acima só copia o
+                   registrador de PALAVRA inteiro pro destino - o cast
+                   vira, na prática, um no-op: qualquer instrução que
+                   consumir `d` depois (ex. a subtração em `acc - (uint8_t)
+                   b`) usa o valor de 16 bits cheio de `b`, não o valor
+                   truncado pra 0-255. Precisa do mesmo tratamento já usado
+                   em IR_LOAD_MEM/IR_LOAD_SYM pra byte de 1 byte: `AND
+                   #0x00FF` (zero-extend) quando o tipo de DESTINO
+                   (`i->is_signed`) é unsigned, ou `SHL #8`/`ASHR #8`
+                   (sign-extend) quando é signed - mantendo o mesmo
+                   truque usado no widening acima, porque este backend
+                   sempre representa um valor de 1 byte como um
+                   registrador de PALAVRA cujo byte alto espelha o sinal
+                   (ou é zero). */
+                int narrow_to_byte = (i->size == 1);
                 if (strcmp(a, d) != 0) {
                     char ops[48]; snprintf(ops, sizeof(ops), "%s, %s", d, a);
                     emit_raw(cg, NULL, "MOV", ops, NULL);
@@ -558,6 +581,16 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
                     emit_raw(cg, NULL, "SHL", shl, "sign-extend byte->word: shift byte to high half");
                     char ashr[32]; snprintf(ashr, sizeof(ashr), "%s, #8", d);
                     emit_raw(cg, NULL, "ASHR", ashr, "...then arithmetic-shift back, replicating the sign bit");
+                } else if (narrow_to_byte) {
+                    if (i->is_signed) {
+                        char shl[32]; snprintf(shl, sizeof(shl), "%s, #8", d);
+                        emit_raw(cg, NULL, "SHL", shl, "narrow to signed byte: shift byte to high half");
+                        char ashr[32]; snprintf(ashr, sizeof(ashr), "%s, #8", d);
+                        emit_raw(cg, NULL, "ASHR", ashr, "...then arithmetic-shift back, replicating the sign bit");
+                    } else {
+                        char ops2[48]; snprintf(ops2, sizeof(ops2), "%s, #0x00FF", d);
+                        emit_raw(cg, NULL, "AND", ops2, "narrow to unsigned byte: truncate high byte");
+                    }
                 }
             }
             finish_dst(cg, i->dst);

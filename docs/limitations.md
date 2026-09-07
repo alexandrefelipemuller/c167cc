@@ -6,6 +6,92 @@ assembly > optimization**.
 
 ## Fixed bugs (kept here for history)
 
+- **A narrowing cast (`uint16_t`->`uint8_t` and similar) used INSIDE a
+  larger expression (not as a direct assignment `uint8_t x = expr;`,
+  which already worked) silently discarded the truncation and used the
+  full 16-bit value instead** (found 07/09/2026, promoting
+  `atualiza_acumulador_carga_byte` in the sibling Sirius32 project -
+  `core/motor_geral/atualiza_acumulador_carga_amostras.c` - where
+  `acumulador_carga + valor_anterior - (uint8_t)novo_valor` gave a
+  different result than materializing the cast into its own variable
+  first, `uint8_t novo_valor_byte = (uint8_t)novo_valor;` then using
+  `novo_valor_byte` in the same expression - those should be equivalent
+  and were not). This is the 4th cast-related bug found in this session,
+  distinct from the other three: bug #1 (`a3f83d9`) was about WIDENING
+  sign-extension (`(int16_t)(int8_t)x`); bug #2 (`9d8df6f`) was the
+  register allocator/liveness across `CALL`; bug #3 (`1bddcb1`) was about
+  zero-extension on PARAMETER/signed-byte reload (`IR_LOAD_SYM`/
+  `IR_LOAD_MEM`). This one is about NARROWING (`uint16_t`->`uint8_t`)
+  used as an intermediate operand, not a final store.
+  **Root cause (two independent bugs, one in the optimizer, one in
+  codegen - each alone would have been enough to cause the observed
+  miscompilation)**:
+  1. `src/optimizer/optimizer.c`'s `cast_is_pure_copy()` treated ANY
+     narrowing cast (destination size 1, regardless of source size or
+     signedness) as a "pure copy" safe for alias-propagation - the same
+     mechanism that let a widening sign-extend cast get incorrectly
+     aliased away before bug #1 was fixed, except this predicate was
+     never updated for the opposite (narrowing) direction. Once a
+     `IR_UNOP`/`OP_ASSIGN` narrowing instruction is marked a pure copy,
+     the optimizer sets `alias[dst] = src` and every later use of the
+     cast's destination vreg is rewritten to use the ORIGINAL, untruncated
+     16-bit source vreg directly - the narrowing `IR_UNOP` instruction
+     itself typically becomes dead code and is deleted entirely by the
+     same pass's DCE step. The cast vanishes from the IR before codegen
+     ever sees it.
+  2. Even had (1) not existed, `src/target/c167/codegen/codegen.c`'s
+     `IR_UNOP`/`OP_ASSIGN` case (the same `case` block fixed for widening
+     in bug #1) had no code path at all for narrowing to a 1-byte
+     destination (`i->size == 1`): it just emitted a plain `MOV d, a` and
+     nothing else, copying the full 16-bit source register verbatim. This
+     backend represents every 1-byte value as a 16-bit register (byte in
+     the low half, high half either zero or sign-replicated depending on
+     signedness - see the `IR_LOAD_MEM`/`IR_LOAD_SYM`/`IR_FARREAD8_SYM`
+     comments in the same file), so without an explicit mask/sign-extend
+     after the `MOV`, the "narrowed" register still held the full,
+     untruncated 16-bit value.
+     `uint8_t x = expr;` (direct assignment) was unaffected by either bug
+     in practice: (1) still aliased the vreg away, but the final consumer
+     was a `STORE_SYM`/`STORE_MEM` of size 1, which uses `MOVB` and only
+     ever writes the low byte to memory regardless of what garbage sits
+     in the high byte of the source register - so the truncation happened
+     "for free" at the store, independent of the (missing) cast codegen.
+     The bug only became observable once the cast's result was consumed
+     as an OPERAND of another arithmetic instruction instead of being
+     stored directly.
+  **Fix**: `cast_is_pure_copy()` now returns false whenever
+  `cast_src_size(i) > i->size` (source wider than destination - any
+  narrowing), in addition to the existing widening-sign-extend case;
+  `apply_cast_value()` (used for the optimizer's own constant-fold of a
+  compile-time-constant cast) now takes the destination size/signedness
+  too and truncates+re-extends accordingly, instead of only handling the
+  source side. In codegen, the `IR_UNOP`/`OP_ASSIGN` case now has a
+  `narrow_to_byte` branch (`i->size == 1`) mirroring the existing
+  widening branch: `AND d, #0x00FF` when the destination type is
+  unsigned, or the same `SHL #8`/`ASHR #8` sign-extend trick when it is
+  signed (`(int8_t)` truncation, not just `(uint8_t)`).
+  **Validation**: reproduced with a minimal example
+  (`examples/narrowing_cast_in_expr_global.c`,
+  `OUT = A + B - (uint8_t)B`) - confirmed via `--dump-asm` that the
+  pre-fix output had no `AND`/mask between loading `B` and using it in
+  the `SUB`, and that running it on `../simulador/c166sim.py` with
+  `B=511` (`0x1FF`, so `(uint8_t)B` truncating to `255` actually matters)
+  gave `OUT=10` before the fix (i.e. `A + B - B`, the cast fully
+  discarded) and `OUT=266` after (`10 + 511 - 255`, correct). Also
+  manually checked, both before and after the fix, that: direct
+  assignment (`uint8_t x = (uint8_t)expr;`) was already correct and
+  remains correct; narrowing to a SIGNED byte inside an expression
+  (`A + (int8_t)A`) now sign-extends correctly (confirmed numerically,
+  `A=200` -> `(int8_t)200 == -56` -> `OUT=144`); and a fully
+  compile-time-constant narrowing cast (`10 + 500 - (uint8_t)500`) still
+  constant-folds to the right value (`266`) instead of just skipping the
+  fold. New regression test `sim-narrowing_cast_in_expr_global` added to
+  `tests/meson.build`. `meson test`: 22/22 -> 23/23, no regressions.
+  Production workaround in the Sirius32 project (materializing the cast
+  into a separate `uint8_t` variable before use) was then simplified back
+  to the direct form and revalidated - see that project's own commit
+  history for the outcome.
+
 - **Loading a `int8_t` (or other signed 1-byte) symbol - parameter, local,
   or global - always zero-extended instead of sign-extending, so
   `if (x < 0)` was never true even for a genuinely negative value**
