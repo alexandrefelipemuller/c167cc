@@ -13,6 +13,7 @@ golden_examples = [
   'funcptr_basic',
   'farread_global',
   'call_liveness',
+  'pointer_arith_scaling_array',
 ]
 
 foreach name : golden_examples
@@ -69,6 +70,23 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
     # se o truncamento de fato acontecer: (uint8_t)511 == 255, então
     # 10 + 511 - 255 == 266; com o bug dava 10 + 511 - 511 == 10.
     ['narrowing_cast_in_expr_global', 'examples/narrowing_cast_in_expr_global.c', ['A=10', 'B=511'], ['OUT=266']],
+    # Achado 07/09/2026 (5º bug desta sessão, ver docs/limitations.md/
+    # "Fixed bugs"): `ptr + literal`/`&x + literal` atribuído a uma variável
+    # (fora de um `array[i]` com colchetes, que já escalava certo) somava o
+    # literal cru em BYTES em vez de escalar por sizeof(*ptr). `&A + 3` num
+    # `uint16_t*` deve avançar 6 bytes, não 3 - `off = (uint16_t)p - base`
+    # torna a diferença observável sem depender de outra variável global
+    # estar alocada logo em seguida (o harness "toy" só declara símbolos que
+    # aparecem no corpo portado da função, não os globais do `.bss`
+    # originais - ver tests/port_to_toy_asm.py). Com o bug, OUT=3; corrigido,
+    # OUT=6.
+    ['pointer_arith_scaling_global', 'examples/pointer_arith_scaling_global.c', ['A=100'], ['OUT=6']],
+    # Mesmo padrão com ponteiro de 1 byte (uint8_t*): sizeof(*ptr)==1, então
+    # escalar é um no-op - este caso já funcionava antes do fix (por sorte,
+    # não por tratamento especial) e serve de guarda de regressão pra
+    # garantir que o fix acima (que só evita escalar quando esz==1) não
+    # quebrou esse caminho por acidente.
+    ['pointer_arith_scaling_byte_global', 'examples/pointer_arith_scaling_byte_global.c', ['A=5'], ['OUT=3']],
   ]
   foreach c : sim_cases
     test('sim-' + c[0],

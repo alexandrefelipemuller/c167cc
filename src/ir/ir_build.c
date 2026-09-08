@@ -558,6 +558,59 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
             Type *lt, *rt;
             int lv = gen_expr(b, e->lhs, &lt);
             int rv = gen_expr(b, e->rhs, &rt);
+            /* Pointer arithmetic scaling (found 07/09/2026, promoting
+               `busca_indice_eixo_rpm` in the sibling Sirius32 project - see
+               docs/limitations.md "Fixed bugs"): `ptr + int`/`int + ptr`/
+               `ptr - int` must scale the integer operand by sizeof(*ptr)
+               before the raw add/sub, and `ptr - ptr` must divide the raw
+               byte difference by sizeof(*ptr) to yield an element count.
+               `array[i]` (EXPR_INDEX, in gen_lvalue_addr above) already did
+               this correctly via an explicit IR_CONST+OP_MUL; this generic
+               EXPR_BINARY path - reached whenever a decayed array/pointer
+               value is combined with an integer OUTSIDE of `[]` (e.g.
+               `p = arr + 1;`) - treated both operands as plain integers and
+               silently added/subtracted raw byte counts instead. A pointee
+               of size 1 (`uint8_t*`/`char*`) is left untouched: scaling by 1
+               is a no-op, so that case was never observably wrong and stays
+               on the exact same code path it already used. */
+            if (lt->kind == TY_PTR && rt->kind == TY_PTR && (e->op == OP_SUB)) {
+                int esz = type_bytes(lt->pointee ? lt->pointee : u16_type());
+                IrInst *i = emit(b, IR_BINOP);
+                i->dst = new_vreg(b); i->op = OP_SUB; i->a = lv; i->b = rv;
+                i->size = 2; i->loc = e->loc;
+                int diff = i->dst;
+                if (esz > 1) {
+                    IrInst *c = emit(b, IR_CONST);
+                    c->dst = new_vreg(b); c->imm = esz; c->size = 2; c->loc = e->loc;
+                    IrInst *d = emit(b, IR_BINOP);
+                    d->dst = new_vreg(b); d->op = OP_DIV; d->a = diff; d->b = c->dst;
+                    d->size = 2; d->loc = e->loc;
+                    diff = d->dst;
+                }
+                *out_type = u16_type();
+                return diff;
+            }
+            if ((e->op == OP_ADD || e->op == OP_SUB) && lt->kind == TY_PTR && rt->kind != TY_PTR) {
+                int esz = type_bytes(lt->pointee ? lt->pointee : u16_type());
+                if (esz > 1) {
+                    IrInst *c = emit(b, IR_CONST);
+                    c->dst = new_vreg(b); c->imm = esz; c->size = 2; c->loc = e->loc;
+                    IrInst *m = emit(b, IR_BINOP);
+                    m->dst = new_vreg(b); m->op = OP_MUL; m->a = rv; m->b = c->dst;
+                    m->size = 2; m->loc = e->loc;
+                    rv = m->dst;
+                }
+            } else if (e->op == OP_ADD && rt->kind == TY_PTR && lt->kind != TY_PTR) {
+                int esz = type_bytes(rt->pointee ? rt->pointee : u16_type());
+                if (esz > 1) {
+                    IrInst *c = emit(b, IR_CONST);
+                    c->dst = new_vreg(b); c->imm = esz; c->size = 2; c->loc = e->loc;
+                    IrInst *m = emit(b, IR_BINOP);
+                    m->dst = new_vreg(b); m->op = OP_MUL; m->a = lv; m->b = c->dst;
+                    m->size = 2; m->loc = e->loc;
+                    lv = m->dst;
+                }
+            }
             int sz = type_bytes(lt) >= type_bytes(rt) ? type_bytes(lt) : type_bytes(rt);
             if (sz < 2) sz = 2;
             IrInst *i = emit(b, IR_BINOP);

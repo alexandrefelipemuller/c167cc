@@ -92,6 +92,80 @@ assembly > optimization**.
   to the direct form and revalidated - see that project's own commit
   history for the outcome.
 
+- **Pointer arithmetic (`ptr + int`, `int + ptr`, `ptr - int`, `ptr -
+  ptr`) assigned to a variable, or otherwise used outside of `array[i]`
+  subscript syntax, did not scale the integer operand by `sizeof(*ptr)` -
+  it added/subtracted the raw literal as a byte count regardless of the
+  pointee's size** (found 07/09/2026, promoting `busca_indice_eixo_rpm`
+  in the sibling Sirius32 project - `core/interpolacao/
+  busca_eixo_interpolacao.c`). `const uint16_t *valores = tabela + 1;`
+  generated code that added 1 BYTE to the pointer instead of 1 WORD (2
+  bytes) - confirmed with `--dump-asm` (`MOV R1,#1 ; ADD R2,R1`, no
+  scaling). This is the 5th bug found in this session. Array *subscript*
+  access (`array[i]`) was NOT affected - `gen_lvalue_addr()`'s
+  `EXPR_INDEX` case already scaled the index correctly via an explicit
+  `IR_CONST` + `IR_BINOP(OP_MUL)` by `sizeof(element)` (confirmed in the
+  same dump) before adding it to the base address.
+  **Root cause**: `src/ir/ir_build.c`'s generic `EXPR_BINARY` case in
+  `gen_expr()` - reached for any `+`/`-` expression that is not a direct
+  `array[i]` subscript, including a decayed array or a pointer value
+  combined with an integer anywhere else (`ptr + literal`, `&x + n`,
+  `ptr - n`, pointer difference, or any of these nested inside a larger
+  expression) - built the `IR_BINOP` straight from both operands' raw
+  vregs with no awareness that one side was a pointer type at all: it
+  just picked the wider of the two operand sizes for the result and
+  emitted a plain `ADD`/`SUB`. The scaling logic that `EXPR_INDEX` already
+  had lived only in `gen_lvalue_addr()`, a completely separate function
+  used solely for lvalue address computation (assignment targets,
+  `&expr`, dereference) - `gen_expr()`'s generic binary-operator path
+  never called it and had no equivalent of its own.
+  **Fix**: in `gen_expr()`'s `EXPR_BINARY` case, right after evaluating
+  both operands' types, three new cases run before the existing
+  `IR_BINOP` is built: (1) `ptr - ptr` (both operands `TY_PTR`) computes
+  the raw byte difference and then divides it by `sizeof(*ptr)` to yield
+  an element count, returning early with `u16_type()` as the result type;
+  (2) `ptr +/- int` and `int + ptr` multiply the integer operand by
+  `sizeof(*ptr)` (via the same `IR_CONST`+`IR_BINOP(OP_MUL)` pattern
+  `EXPR_INDEX` already used) before falling through into the normal
+  `IR_BINOP` construction, so the rest of the function - result type,
+  signedness, codegen - is untouched. In every case, a pointee of size 1
+  (`uint8_t*`/`char*`/`int8_t*`) skips the multiply/divide entirely
+  (`esz > 1` guard), so that already-correct case stays on the exact same
+  code path it used before the fix - scaling by 1 was never wrong, but
+  the fix is careful not to introduce a `MUL #1`/`DIV #1` there that
+  wasn't there before.
+  **Validation**: reproduced with a minimal example
+  (`examples/pointer_arith_scaling_array.c`, `tabela + 1` assigned to a
+  `const uint16_t *`) - confirmed via `--dump-asm` that the pre-fix output
+  added a raw, unscaled `#1` to the pointer and the post-fix output adds
+  `#2` (now a `golden-pointer_arith_scaling_array` test, pinning the
+  scaled output). Numerically cross-validated on `../simulador/
+  c166sim.py` with two new `sim-*` regression tests, since the toy
+  harness (`tests/port_to_toy_asm.py`) only declares symbols that
+  actually appear in a function's ported body - not the original
+  `.bss` globals - so a test can't rely on a second array element or
+  global happening to land at a computable adjacent address:
+  `examples/pointer_arith_scaling_global.c` computes
+  `off = (uint16_t)(&A + 3) - (uint16_t)&A` on a `uint16_t*`, which must
+  be `6` (`3 * sizeof(uint16_t)`) - it read back as `3` (raw, unscaled)
+  before the fix and `6` after; `examples/
+  pointer_arith_scaling_byte_global.c` runs the identical pattern on a
+  `uint8_t*`, where the expected difference is `3` either way (scaling by
+  1 is a no-op) - this passed both before and after the fix, guarding
+  against the fix's `esz > 1` branch accidentally being taken (or not
+  taken) for byte pointers. Also manually re-checked `array[i]` subscript
+  access (`golden-max_vetor`, which indexes a `uint16_t*` parameter) still
+  produces the identical, already-correct `MULU`-scaled golden output
+  after the fix. `meson test`: 23/23 -> 26/26 (3 new tests), no
+  regressions. Production workaround in the Sirius32 project (indexing
+  the original array directly with the offset folded into the index,
+  `tabela[i + 1]` instead of `(tabela + 1)[i]`, to avoid the buggy
+  intermediate pointer variable) was deliberately left in place after the
+  fix, not reverted: `tabela[i + 1]` is already idiomatic, at-least-as-
+  readable C on its own merits, not something that was made awkward just
+  to route around the bug - see that project's own commit history for
+  the decision.
+
 - **Loading a `int8_t` (or other signed 1-byte) symbol - parameter, local,
   or global - always zero-extended instead of sign-extending, so
   `if (x < 0)` was never true even for a genuinely negative value**
