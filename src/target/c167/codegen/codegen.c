@@ -305,6 +305,29 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
             }
             break;
         }
+        case IR_COMPOSE32_STORE_SYM: {
+            /* dst32 = (hi << 16) | lo, composed from two independent
+               16-bit values (not MULU's fixed MDL:MDH result register) -
+               plain MOVs of `a`/`b` straight to the destination's
+               high/low words (see IR_COMPOSE32_STORE_SYM in ir.h and
+               try_gen_compose32_store_sym in ir_build.c). */
+            const char *hi = load_operand(cg, i->a, C167_SPILL_SCRATCH_1);
+            const char *lo = load_operand(cg, i->b, C167_SPILL_SCRATCH_2);
+            if (i->sym->kind == SYM_LOCAL || i->sym->kind == SYM_PARAM) {
+                char st[64];
+                snprintf(st, sizeof(st), "[R15+#%d], %s", i->sym->stack_offset, lo);
+                emit_raw(cg, NULL, "MOV", st, "low word of composed 32-bit value");
+                snprintf(st, sizeof(st), "[R15+#%d], %s", i->sym->stack_offset + 2, hi);
+                emit_raw(cg, NULL, "MOV", st, "high word of composed 32-bit value");
+            } else {
+                char opslo[80], opshi[80];
+                snprintf(opslo, sizeof(opslo), "%s, %s", i->sym->name, lo);
+                snprintf(opshi, sizeof(opshi), "%s+2, %s", i->sym->name, hi);
+                emit_raw(cg, NULL, "MOV", opslo, "low word of composed 32-bit value");
+                emit_raw(cg, NULL, "MOV", opshi, "high word of composed 32-bit value");
+            }
+            break;
+        }
         case IR_SHR32_SYM: {
             /* (u16)(sym32 >> N) without real 32-bit registers: for N==16
                the result is exactly the high word; for N<16 it's

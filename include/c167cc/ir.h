@@ -48,6 +48,33 @@ typedef enum {
                        wider than 16 bits, or a 32-bit quotient assigned back
                        to a 32-bit variable (same narrow-result restriction
                        as IR_SHR32_SYM). */
+    IR_COMPOSE32_STORE_SYM, /* store32(sym, (hi_word=a) << 16 | (lo_word=b)) -
+                         narrow counterpart to IR_MUL32_STORE_SYM/
+                         IR_SHR32_SYM/IR_DIV32_SYM (see the long comment
+                         there and the "no real 32-bit value support"
+                         note at the top of ir_build.c): recognizes the
+                         common "compose a 32-bit value from two 16-bit
+                         halves" C idiom, `dst32 = ((uint32_t)hi << 16) |
+                         lo;` (or `lo | ((uint32_t)hi << 16)`, either
+                         operand order), which is the exact inverse of
+                         what IR_SHR32_SYM's N==16/N<16 cases extract.
+                         Without this, the generic IR_BINOP path evaluates
+                         `(uint32_t)hi << 16` as a single 16-bit SHL (SHL
+                         by 16 on a 16-bit register yields 0, not a true
+                         widening shift) and IR_STORE_SYM only ever writes
+                         one word to the destination - so both HI's
+                         contribution and the destination's high word were
+                         silently lost (found 09/09/2026, promoting
+                         `research/interpolacao_motor/
+                         3b51c_motor_divisao_peso_interpolacao.c` in the
+                         sibling Sirius32 project, file 0x3B51C). Emits
+                         two plain MOVs straight to the destination
+                         symbol's low/high words (`a` -> high word, `b`
+                         -> low word) - no MDL/MDH involved, this is pure
+                         data movement, not an arithmetic instruction with
+                         a fixed 32-bit result register like MULU/DIVLU.
+                         See try_gen_compose32_store_sym() in
+                         ir_build.c. */
     IR_FARREAD16_SYM, /* dst = far_read16(page=a, off=b) - one atomic
                          EXTP page,#1 immediately followed by MOV dst,[off],
                          with NOTHING emitted in between (same "recognize

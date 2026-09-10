@@ -59,6 +59,17 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
     ['calculate_global', 'examples/calculate_global.c', ['RPM=3500', 'LOAD=7'], ['OUT=17']],
     ['mul_add_global', 'examples/mul_add_global.c', ['X=6'], ['OUT=65']],
     ['div32_global', 'examples/div32_global.c', ['A=1234', 'B=777'], ['QUOC=9588', 'REM=18']],
+    # Achado 09/09/2026 (6º bug desta sessão, ver docs/limitations.md/
+    # "Fixed bugs"): compor um `uint32_t` a partir de duas metades de 16
+    # bits, `((uint32_t)hi << 16) | lo`, caía no caminho genérico de 16
+    # bits (SHL de 16 bits por 16 posições zera o registrador inteiro, e
+    # o OR/store só escrevia a palavra baixa do destino de 32 bits) -
+    # HI=0x1234 nunca aparecia em lugar nenhum do resultado. Consertado
+    # com IR_COMPOSE32_STORE_SYM, contraparte de IR_SHR32_SYM na direção
+    # oposta. HI=0x1234, LO=0x2222 -> OUT_HI=0x1234 (4660), OUT_LO=0x2222
+    # (8738); com o bug, OUT_HI seria 0 (ou lixo) e OUT_LO ficaria certo
+    # por coincidência (o OR com o SHL zerado é um no-op).
+    ['compose32_global', 'examples/compose32_global.c', ['HI=4660', 'LO=8738'], ['OUT_HI=4660', 'OUT_LO=8738']],
     ['signext_byte_global', 'examples/signext_byte_global.c', ['IN=200'], ['OUT=-56']],
     ['sign_param_signed_compare_global', 'examples/sign_param_signed_compare_global.c', ['IN_S8=140'], ['OUT=1']],
     # Achado 07/09/2026 (4º bug de cast desta sessão, ver docs/limitations.md/

@@ -171,6 +171,46 @@ static int try_gen_div32_sym(Builder *b, Expr *e, Type **out_type) {
     return i->dst;
 }
 
+/* Narrow counterpart to try_gen_shr32_sym()/try_gen_div32_sym() above,
+   going the other direction: recognizes the "compose a 32-bit value from
+   two 16-bit halves" idiom, `dst32 = ((uint32_t)hi << 16) | lo;` (or with
+   the OR operands swapped), and lowers it to IR_COMPOSE32_STORE_SYM
+   instead of letting it fall into the generic 16-bit-only IR_BINOP path
+   (found 09/09/2026, promoting `research/interpolacao_motor/
+   3b51c_motor_divisao_peso_interpolacao.c` in the sibling Sirius32
+   project - see IR_COMPOSE32_STORE_SYM in ir.h for the full symptom).
+   Only matches a direct assignment to an already-declared 32-bit
+   variable/global, same restriction as try_gen_widening_mul_store_sym().
+   Returns -1 if the pattern doesn't match (caller falls through to the
+   normal, still-buggy-for-this-shape path). */
+static int match_hi_shl16(Expr *e, Expr **hi_out) {
+    if (e->kind != EXPR_BINARY || e->op != OP_SHL) return 0;
+    if (e->rhs->kind != EXPR_INT_LIT || e->rhs->ival != 16) return 0;
+    *hi_out = e->lhs;
+    return 1;
+}
+
+static int try_gen_compose32_store_sym(Builder *b, Symbol *dst_sym, Expr *rhs, SrcLoc loc) {
+    if (!dst_sym) return -1;
+    if (dst_sym->type->kind != TY_U32 && dst_sym->type->kind != TY_I32) return -1;
+    if (rhs->kind != EXPR_BINARY || rhs->op != OP_OR) return -1;
+
+    Expr *hi_expr, *lo_expr;
+    if (match_hi_shl16(rhs->lhs, &hi_expr)) lo_expr = rhs->rhs;
+    else if (match_hi_shl16(rhs->rhs, &hi_expr)) lo_expr = rhs->lhs;
+    else return -1;
+
+    Type *ht, *lt;
+    int hv = gen_expr(b, hi_expr, &ht);
+    int lv = gen_expr(b, lo_expr, &lt);
+
+    IrInst *m = emit(b, IR_COMPOSE32_STORE_SYM);
+    m->a = hv; m->b = lv;
+    m->sym = dst_sym;
+    m->loc = loc;
+    return lv;
+}
+
 /* Compute address of an lvalue into a vreg (address-of semantics). Returns element type. */
 static int gen_lvalue_addr(Builder *b, Expr *e, Type **elem_type) {
     if (e->kind == EXPR_IDENT) {
@@ -657,6 +697,15 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
                         *out_type = dst_sym->type;
                         return wv;
                     }
+                    int cv = try_gen_compose32_store_sym(b, dst_sym, e->rhs, e->loc);
+                    if (cv >= 0) {
+                        /* `x = ((uint32_t)hi << 16) | lo;` onde x já é
+                           uint32_t/int32_t - ver comentário de
+                           try_gen_compose32_store_sym. */
+                        e->lhs->sym = dst_sym;
+                        *out_type = dst_sym->type;
+                        return cv;
+                    }
                 }
             }
             Type *rt;
@@ -812,6 +861,9 @@ static void gen_stmt(Builder *b, Stmt *s) {
                 } else if (try_gen_widening_mul_store_sym(b, sym, s->decl->init, s->loc) >= 0) {
                     /* `uint32_t x = a * b;` - ver comentário de
                        try_gen_widening_mul_store_sym acima. */
+                } else if (try_gen_compose32_store_sym(b, sym, s->decl->init, s->loc) >= 0) {
+                    /* `uint32_t x = ((uint32_t)hi << 16) | lo;` - ver
+                       comentário de try_gen_compose32_store_sym acima. */
                 } else {
                     Type *t;
                     int v = gen_expr(b, s->decl->init, &t);

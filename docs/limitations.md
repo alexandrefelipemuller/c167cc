@@ -6,6 +6,94 @@ assembly > optimization**.
 
 ## Fixed bugs (kept here for history)
 
+- **Composing a `uint32_t`/`int32_t` from two 16-bit halves,
+  `dst32 = ((uint32_t)hi << 16) | lo;` (the exact inverse of the
+  already-known `sym32 >> 16` extraction pattern, `IR_SHR32_SYM` below),
+  fell into the generic 16-bit-only path: the cast-and-shift never
+  produced a real 32-bit value (`SHL` by 16 on a 16-bit register just
+  zeroes it, discarding `hi` entirely) and the subsequent `OR`/store only
+  ever wrote the destination's low word - the high word of the 32-bit
+  destination was never touched at all** (found 09/09/2026, promoting a
+  function in the sibling Sirius32 project - `research/
+  interpolacao_motor/3b51c_motor_divisao_peso_interpolacao.c`, file
+  `0x3B51C` - which reconstructs a wide dividend from two hardware
+  registers this way before a 32-bit division). This is the 6th bug found
+  in this session, and - like `IR_MUL32_STORE_SYM`/`IR_SHR32_SYM`/
+  `IR_DIV32_SYM` below - not a new *kind* of defect so much as a new
+  *shape* hitting the same, already-documented, already-understood root
+  limitation: this backend represents every scalar value as ONE 16-bit
+  vreg everywhere in the IR/codegen, so genuine 32-bit arithmetic outside
+  the three previously special-cased shapes is "not implemented", not
+  merely buggy (see "Implemented but scoped down" below, which already
+  said "everything else... is still silently wrong" before this fix -
+  this entry adds a 4th narrow exception to that list rather than
+  claiming a previously-unknown miscompile of otherwise-supported code).
+  **Root cause**: `src/ir/ir_build.c`'s generic `EXPR_BINARY` case has no
+  concept of a 32-bit result at all - `(uint32_t)hi << 16` lowers through
+  the ordinary `EXPR_CAST` (a same-vreg `IR_UNOP`/`OP_ASSIGN`, still just
+  16 bits wide in this backend) followed by the ordinary `OP_SHL`
+  `IR_BINOP`, which shifts a single 16-bit register by an immediate of
+  16 - shifting a register by its own full width is well-defined on the
+  C167 (`SHL Rn, #16`... in practice the codegen clamps/executes a
+  16-bit-wide shift which simply empties the register) but is NEVER what
+  the C source means when the destination is actually 32 bits; the `OR`
+  with `lo` then combines two 16-bit vregs into one more 16-bit vreg, and
+  the final `IR_STORE_SYM` writes exactly `size` bytes of straight memory
+  starting at the symbol's address using the *type's* declared size for
+  the instruction, but with only one 16-bit vreg to source from - so only
+  the low word of a 4-byte destination was ever written; the high word
+  kept whatever was already at that memory location (a `.bss` global's
+  usual zero-init, in practice, which is why the report initially read as
+  "the high word is zeroed" - it's really "the high word is simply never
+  written", zero only because nothing else had written it either).
+  **Fix**: mirrors `try_gen_widening_mul_store_sym()`/`try_gen_shr32_sym()`/
+  `try_gen_div32_sym()` exactly (same file): a new
+  `try_gen_compose32_store_sym()` recognizes the exact shape `dst32 =
+  (hi_expr << 16) | lo_expr` (or `lo_expr | (hi_expr << 16)`, either
+  operand order of the `OR`; the shift's left operand may or may not be
+  wrapped in an explicit widening cast, matching how the multiply pattern
+  also accepts "with or without an explicit cast on the operands") for a
+  direct assignment (or declaration-with-initializer) to an
+  already-declared 32-bit symbol, and lowers it to a new IR instruction,
+  `IR_COMPOSE32_STORE_SYM` (`include/c167cc/ir.h`), instead of the
+  generic `IR_BINOP`+`IR_STORE_SYM` pair. Unlike `IR_MUL32_STORE_SYM`
+  (which reads its 32-bit result out of the fixed `MDL:MDH` register pair
+  left behind by `MULU`/`MUL`), `IR_COMPOSE32_STORE_SYM`'s two halves are
+  two independent, already-evaluated 16-bit vregs with no relationship to
+  each other - codegen (`src/target/c167/codegen/codegen.c`) just emits
+  two plain `MOV`s straight to the destination symbol's low/high words
+  (`sym`/`sym+2` for a global, `[R15+#off]`/`[R15+#off+2]` for a
+  local/parameter), no `MDL`/`MDH` involved. Hooked into both places
+  `try_gen_widening_mul_store_sym()` already was: the `EXPR_ASSIGN`
+  case in `gen_expr()` (`x = ...;`) and the `STMT_DECL` initializer case
+  in `gen_stmt()` (`uint32_t x = ...;`), tried right after the
+  multiply pattern in both spots so a mixed use of both idioms in the
+  same function keeps working. Outside this exact shape (composing into
+  something other than a plain already-declared 32-bit variable - e.g.
+  as an intermediate value inside a larger expression, or into a struct
+  field/array element), the code still falls into the old, still-buggy,
+  documented-limitation path.
+  **Validation**: reproduced with a minimal example
+  (`examples/compose32_global.c`, `OUT = ((uint32_t)HI << 16) | LO;`) -
+  confirmed via `--dump-asm` that the pre-fix output computed `SHL` on a
+  16-bit register by an immediate of 16 (zeroing it) and emitted only one
+  `MOV OUT, ...` (no `OUT+2` store anywhere), and that the post-fix
+  output emits `MOV OUT, R1` (low word = `LO`) followed by
+  `MOV OUT+2, R0` (high word = `HI`) with no `SHL`/`OR` at all. Since the
+  toy simulator harness (`tests/port_to_toy_asm.py`) only ever compares
+  16-bit values, the new `sim-compose32_global` regression test reads
+  `OUT` back split into two 16-bit halves via `OUT >> 16` (already-fixed
+  `IR_SHR32_SYM`) and a plain narrowing cast (`(uint16_t)OUT`, low word):
+  `HI=0x1234 (4660)`, `LO=0x2222 (8738)` (kept under `0x8000` so the
+  simulator's signed 16-bit register dump in the test log doesn't turn a
+  legitimate positive value negative and confuse the comparison) expects
+  `OUT_HI=4660, OUT_LO=8738` - this failed before the fix (`OUT_HI` came
+  back `0`, `HI`'s value nowhere in the result) and passed after it.
+  Manually re-ran `sim-div32_global` and `sim-pointer_arith_scaling_*`
+  (the other tests exercising 32-bit symbols/pointer scaling) to confirm
+  no interaction with the new pattern-match order. `meson test`: 26/26 ->
+  27/27 (1 new test), no regressions.
+
 - **A narrowing cast (`uint16_t`->`uint8_t` and similar) used INSIDE a
   larger expression (not as a direct assignment `uint8_t x = expr;`,
   which already worked) silently discarded the truncation and used the
@@ -543,15 +631,17 @@ pointers to them work fully.
 - **32-bit integers** (`int32_t`/`uint32_t`) can be declared and
   loaded/stored, but arithmetic (`+ - * / etc.`) on them is not lowered
   correctly by the backend in general - it treats every scalar operation as
-  16-bit. Three narrow exceptions were special-cased (see "Fixed bugs"
-  above, `IR_MUL32_STORE_SYM`/`IR_SHR32_SYM`/`IR_DIV32_SYM`): `dst32 = a *
-  b` (direct assignment of a widening multiply to a 32-bit variable),
-  `some32bitvar >> N` for constant `N`, and `some32bitvar / expr` /
-  `some32bitvar % expr` (16-bit divisor, result truncated to 16 bits).
-  Everything else - `+`, `-`, 32-bit values threaded through anything but
-  those three exact shapes, function arguments/returns - is still
-  silently wrong. Avoid general 32-bit arithmetic until this is
-  addressed.
+  16-bit. Four narrow exceptions were special-cased (see "Fixed bugs"
+  above, `IR_MUL32_STORE_SYM`/`IR_SHR32_SYM`/`IR_DIV32_SYM`/
+  `IR_COMPOSE32_STORE_SYM`): `dst32 = a * b` (direct assignment of a
+  widening multiply to a 32-bit variable), `some32bitvar >> N` for
+  constant `N`, `some32bitvar / expr` / `some32bitvar % expr` (16-bit
+  divisor, result truncated to 16 bits), and `dst32 = ((uint32_t)hi <<
+  16) | lo` (direct assignment composing a 32-bit variable from two
+  16-bit halves - the inverse of the `>> N` extraction). Everything else
+  - `+`, `-`, 32-bit values threaded through anything but those four
+  exact shapes, function arguments/returns - is still silently wrong.
+  Avoid general 32-bit arithmetic until this is addressed.
 - **Function arguments**: only up to 4 word-sized arguments are
   supported (passed in `R4-R7`, see `docs/abi.md`). Calling or defining a
   function with more raises a compile error rather than silently spilling
