@@ -6,6 +6,46 @@ assembly > optimization**.
 
 ## Fixed bugs (kept here for history)
 
+- **A type qualifier (`const`/`volatile`) inside an expression cast to
+  pointer type was rejected by the parser**, e.g. `(volatile uint16_t
+  *)0xFD90` or `(const uint16_t *)&x` failed with `error: syntax error
+  (near 'volatile')` (found 19/09/2026, auditing 47 files in the sibling
+  Sirius32 project stuck in the "pointer/stack/extern/static" triage
+  category - most were actually blocked by this, not by a genuine
+  pointer/codegen limitation: the project's `@ram(0xADDR) volatile <T>
+  name;` convention already covers *declared* fixed-address symbols, but
+  SFR/register access expressed inline as a cast of a raw address
+  literal - which by the same project's convention must be `volatile` -
+  had no way to spell that). **Root cause**: `qual_opt` (`const`/
+  `volatile`, in any order/combination) was only wired into the grammar
+  at declaration sites (`top_item`, `decl_declarator_list`, etc., all in
+  `src/parser/parser.y`) - the single cast-expression production in
+  `unary_expr`, `'(' type_spec ptr_opt ')' unary_expr`, went straight
+  from `(` to `type_spec` with no qualifier in between, so a qualifier
+  there was simply not a valid token at that position. This was a pure
+  grammar gap: the AST's `Type` already carries a qualifier-independent
+  representation (a cast's target type is used only for its size/
+  signedness/pointer-ness, exactly like `(uint16_t *)0xFD90` - already
+  supported - so nothing downstream of the parser needed to change).
+  **Fix**: `'(' qual_opt type_spec ptr_opt ')' unary_expr` - `qual_opt`
+  (already `%empty | qual_opt KW_VOLATILE | qual_opt KW_CONST`) added
+  before `type_spec` in that one production; the qualifier tokens are
+  consumed and intentionally discarded, matching how declaration sites
+  already parse qualifiers without storing them separately (this
+  compiler doesn't distinguish `const`/non-`const` for codegen purposes -
+  see "Not implemented at all" below). No change to the AST, semantic
+  analysis, IR, or codegen was needed.
+  **Validation**: `meson test`: 27/27 -> 29/29 (2 new tests, no
+  regressions) - `golden-cast_qualifier_fixed_addr` (`examples/
+  cast_qualifier_fixed_addr.c`) pins the parse/codegen of `*(volatile
+  uint16_t *)0xFD90 = 42;` and `*(const volatile uint16_t *)0xFD90`
+  (confirmed identical to the already-working unqualified-cast codegen,
+  as expected since the qualifier is discarded), and
+  `sim-cast_qualifier_sfr_global` (`examples/
+  cast_qualifier_sfr_global.c`) actually runs a write-then-read-back
+  through `(volatile uint16_t *)0x2000` / `(const uint16_t *)0x2000` in
+  the simulator and checks the round-tripped value.
+
 - **Composing a `uint32_t`/`int32_t` from two 16-bit halves,
   `dst32 = ((uint32_t)hi << 16) | lo;` (the exact inverse of the
   already-known `sym32 >> 16` extraction pattern, `IR_SHR32_SYM` below),

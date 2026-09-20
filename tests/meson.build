@@ -14,6 +14,7 @@ golden_examples = [
   'farread_global',
   'call_liveness',
   'pointer_arith_scaling_array',
+  'cast_qualifier_fixed_addr',
 ]
 
 foreach name : golden_examples
@@ -98,6 +99,13 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
     # garantir que o fix acima (que só evita escalar quando esz==1) não
     # quebrou esse caminho por acidente.
     ['pointer_arith_scaling_byte_global', 'examples/pointer_arith_scaling_byte_global.c', ['A=5'], ['OUT=3']],
+    # Achado 19/09/2026: `(volatile uint16_t *)ADDR`/`(const uint16_t *)ADDR`
+    # eram rejeitados pelo parser ("syntax error (near 'volatile')") - o
+    # qualificador só era aceito em declaração, não dentro de um cast de
+    # expressão (ver docs/limitations.md). Exercita escrita+leitura de
+    # verdade por esse cast, não só o parse (isso já é coberto pelo golden
+    # golden-cast_qualifier_fixed_addr acima).
+    ['cast_qualifier_sfr_global', 'examples/cast_qualifier_sfr_global.c', ['IN=1234'], ['OUT=1234']],
   ]
   foreach c : sim_cases
     test('sim-' + c[0],

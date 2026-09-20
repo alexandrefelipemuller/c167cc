@@ -214,7 +214,11 @@ Arithmetic `+ - * / %`, bitwise `& | ^ ~ << >>`, logical `! && ||`
 (short-circuit), comparisons `== != < > <= >=`, assignment `=` and
 compound assignment `+= -= *= /=`, `++`/`--` (pre and post), the ternary
 operator `?:`, function calls, array indexing `a[i]`, pointer
-dereference `*p`, address-of `&x`, and C-style casts `(T)e`.
+dereference `*p`, address-of `&x`, and C-style casts `(T)e`. A cast's type
+name may include `const`/`volatile` (in any order/combination), e.g.
+`(volatile uint16_t *)0xFD90` - needed to express a `volatile`
+pointer-to-fixed-address read/write inline in an expression, without first
+declaring a named pointer variable.
 
 ## Grammar
 

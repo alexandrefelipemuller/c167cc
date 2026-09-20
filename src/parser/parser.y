@@ -792,10 +792,10 @@ unary_expr:
     | '*' unary_expr %prec UNARY { Expr *e = expr_new(EXPR_DEREF, loc()); e->rhs = $2; $$ = e; }
     | OP_INC unary_expr { Expr *e = expr_new(EXPR_PREINC, loc()); e->lhs = $2; $$ = e; }
     | OP_DEC unary_expr { Expr *e = expr_new(EXPR_PREDEC, loc()); e->lhs = $2; $$ = e; }
-    | '(' type_spec ptr_opt ')' unary_expr %prec UNARY
+    | '(' qual_opt type_spec ptr_opt ')' unary_expr %prec UNARY
       {
-        Type *t = $3 ? type_new_ptr($2) : $2;
-        Expr *e = expr_new(EXPR_CAST, loc()); e->cast_type = t; e->rhs = $5; $$ = e;
+        Type *t = $4 ? type_new_ptr($3) : $3;
+        Expr *e = expr_new(EXPR_CAST, loc()); e->cast_type = t; e->rhs = $6; $$ = e;
       }
     ;
 
