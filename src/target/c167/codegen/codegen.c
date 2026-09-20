@@ -407,6 +407,28 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
             finish_dst(cg, i->dst);
             break;
         }
+        case IR_DIV32_MUL: {
+            /* (u16)((a * b) / divisor) or `% divisor`: sibling of
+               IR_DIV32_SYM for an INLINE widening product used directly as
+               dividend (see try_gen_div32_mul() in ir_build.c). Unlike
+               IR_DIV32_SYM, the 32-bit dividend never needs a store/reload
+               round-trip through memory: MUL/MULU already leaves it in
+               MDL:MDH, so DIVL/DIVLU can consume it immediately. */
+            const char *a = load_operand(cg, i->a, C167_SPILL_SCRATCH_1);
+            const char *bmul = load_operand(cg, i->b, C167_SPILL_SCRATCH_2);
+            char ops[48]; snprintf(ops, sizeof(ops), "%s, %s", a, bmul);
+            emit_raw(cg, NULL, i->is_signed ? "MUL" : "MULU", ops, "widening product used directly as dividend");
+            /* a/b are dead after the MUL above, so it's safe to reuse
+               SCRATCH_2 (or SCRATCH_1) to load the divisor now. */
+            const char *bsrc = load_operand(cg, i->args[0], C167_SPILL_SCRATCH_2);
+            emit_raw(cg, NULL, i->is_signed ? "DIVL" : "DIVLU", bsrc, NULL);
+            const char *d = dst_target(cg, i->dst);
+            char ops3[32]; snprintf(ops3, sizeof(ops3), "%s, %s", d, i->op == OP_DIV ? "MDL" : "MDH");
+            emit_raw(cg, NULL, "MOV", ops3, i->op == OP_DIV ? "quotient" : "remainder");
+            finish_dst(cg, i->dst);
+            break;
+        }
+
         case IR_FARREAD16_SYM: {
             /* Atomic far-indexed word read (see IR_FARREAD16_SYM in ir.h):
                EXTP page,#1 MUST be immediately followed by the paired

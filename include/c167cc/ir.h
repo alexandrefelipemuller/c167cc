@@ -75,6 +75,30 @@ typedef enum {
                          a fixed 32-bit result register like MULU/DIVLU.
                          See try_gen_compose32_store_sym() in
                          ir_build.c. */
+    IR_DIV32_MUL,  /* dst = (u16)((a * b) / divisor) or (u16)((a * b) % divisor)
+                       - sibling of IR_DIV32_SYM for the case where the 32-bit
+                       dividend is an INLINE widening product, not already a
+                       named 32-bit symbol (found 19/09/2026: the widening-
+                       division family in the sibling Sirius32 project,
+                       research/interpolacao_motor 0x3BA56/0x3BAF2/0x3BB4C
+                       and 3b536_rotina_normalizacao_divisao_32bit.c, writes
+                       `resultado = (uint16_t)(((uint32_t)a * (uint32_t)b) /
+                       escala);` with the product used directly as the
+                       dividend, never stored to a 32-bit temp first - that
+                       shape doesn't match try_gen_div32_sym(), whose LHS
+                       must already be an ident, so it fell through to the
+                       generic 16-bit path and silently divided only the low
+                       word of the product with DIVU instead of DIVLU).
+                       `a`/`b` are the two 16-bit multiply operands,
+                       `args[0]` is the divisor vreg (nargs==1); codegen does
+                       MULU/MUL a,b then feeds MDL:MDH straight into
+                       DIVLU/DIVL without ever spilling the product to
+                       memory, unlike IR_DIV32_SYM which reloads a stored
+                       symbol. See try_gen_div32_mul() in ir_build.c. NOT
+                       supported: an inline product as dividend where the
+                       32-bit QUOTIENT itself needs to survive further (this,
+                       like IR_DIV32_SYM, only ever produces a 16-bit
+                       result). */
     IR_FARREAD16_SYM, /* dst = far_read16(page=a, off=b) - one atomic
                          EXTP page,#1 immediately followed by MOV dst,[off],
                          with NOTHING emitted in between (same "recognize

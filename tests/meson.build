@@ -71,6 +71,7 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
     # (8738); com o bug, OUT_HI seria 0 (ou lixo) e OUT_LO ficaria certo
     # por coincidência (o OR com o SHL zerado é um no-op).
     ['compose32_global', 'examples/compose32_global.c', ['HI=4660', 'LO=8738'], ['OUT_HI=4660', 'OUT_LO=8738']],
+    ['div32_mul_global', 'examples/div32_mul_global.c', ['A=1234', 'B=777'], ['QUOC=9588', 'REM=18']],
     ['signext_byte_global', 'examples/signext_byte_global.c', ['IN=200'], ['OUT=-56']],
     ['sign_param_signed_compare_global', 'examples/sign_param_signed_compare_global.c', ['IN_S8=140'], ['OUT=1']],
     # Achado 07/09/2026 (4º bug de cast desta sessão, ver docs/limitations.md/

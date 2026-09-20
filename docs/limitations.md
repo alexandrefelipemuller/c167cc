@@ -642,7 +642,45 @@ assembly > optimization**.
   test` unchanged at 15/16 (same pre-existing, unrelated failure);
   Sirius32's `scripts/regressao_core.py` unchanged at 72/72.
 
-## Not implemented at all (by design, this phase)
+  **Update 19/09/2026**: added a fourth narrow case, `IR_DIV32_MUL`
+  (`try_gen_div32_mul()` in `src/ir/ir_build.c`), for the case where the
+  32-bit dividend is an INLINE widening product rather than an
+  already-named 32-bit symbol - `IR_DIV32_SYM` above requires the LHS of
+  `/`/`%` to already be `EXPR_IDENT`, so `((uint32_t)a * (uint32_t)b) /
+  escala` (product used directly, never assigned to a 32-bit temp first)
+  fell through to the generic 16-bit path and silently divided only the
+  low word of the product with `DIV`/`DIVU`. This is exactly the shape of
+  the widening-division family stuck in `research/interpolacao_motor` in
+  the sibling Sirius32 project (`0x3BA56`/`0x3BAF2`/`0x3BB4C`, and the
+  14-occurrence `3b536_rotina_normalizacao_divisao_32bit.c`). Matches
+  `((T)a * (T)b) / expr` or `% expr` where at least one multiply operand
+  carries an explicit cast to a 32-bit type (same "explicit cast signals
+  widening intent" convention already used by the worked examples for the
+  other three cases - there's no 32-bit assignment target here to infer
+  widening from the way `IR_MUL32_STORE_SYM` does). Codegen is actually
+  simpler than `IR_DIV32_SYM`: `MULU`/`MUL a,b` already leaves the product
+  in `MDL:MDH`, so `DIVLU`/`DIVL` consumes it directly with no
+  store/reload round-trip through memory. Verified with a new
+  `sim-div32_mul_global` test (`examples/div32_mul_global.c`, same
+  `A=1234,B=777` → `produto=958818` → `QUOC=9588,REM=18` as
+  `div32_global.c`, but computed with the product inline instead of
+  through a temp); `meson test` unchanged otherwise (27/27 after adding
+  the new test, up from 26/26 baseline measured before this change - note
+  this differs from older docs mentioning 15/16 or 29/29, which are
+  stale/from a different environment; trust a freshly measured baseline).
+
+  Still NOT covered by any of the four narrow cases (characterized
+  19/09/2026, still falls into the old silent-truncation path): a 32-bit
+  accumulator added to a product in the same expression (`acc = acc +
+  (uint32_t)a * (uint32_t)b` - both the product's and `acc`'s high words
+  are dropped), a product used directly in a 16-bit comparison or plain
+  assignment without an intervening cast/division, `>>`/`/` applied to an
+  expression that is itself a sum/difference (only a bare 32-bit
+  identifier or, now, a bare inline product is recognized), `<<` used to
+  compose a 32-bit value from two halves (`((uint32_t)hi << 16) | lo` -
+  no `IR_COMPOSE32_STORE_SYM` or equivalent exists in this codebase
+  despite being a plausible fifth case; not implemented), and any
+  compound-assignment operator (`+=`, `*=`, etc.) on a 32-bit value.
 
 - Assembler, linker, object files, ELF, relocations, machine-code
   encoding, binary/HEX/S-record output, flashing, bootloader. The
@@ -671,17 +709,21 @@ pointers to them work fully.
 - **32-bit integers** (`int32_t`/`uint32_t`) can be declared and
   loaded/stored, but arithmetic (`+ - * / etc.`) on them is not lowered
   correctly by the backend in general - it treats every scalar operation as
-  16-bit. Four narrow exceptions were special-cased (see "Fixed bugs"
+  16-bit. Five narrow exceptions were special-cased (see "Fixed bugs"
   above, `IR_MUL32_STORE_SYM`/`IR_SHR32_SYM`/`IR_DIV32_SYM`/
-  `IR_COMPOSE32_STORE_SYM`): `dst32 = a * b` (direct assignment of a
-  widening multiply to a 32-bit variable), `some32bitvar >> N` for
-  constant `N`, `some32bitvar / expr` / `some32bitvar % expr` (16-bit
-  divisor, result truncated to 16 bits), and `dst32 = ((uint32_t)hi <<
-  16) | lo` (direct assignment composing a 32-bit variable from two
-  16-bit halves - the inverse of the `>> N` extraction). Everything else
-  - `+`, `-`, 32-bit values threaded through anything but those four
-  exact shapes, function arguments/returns - is still silently wrong.
-  Avoid general 32-bit arithmetic until this is addressed.
+  `IR_COMPOSE32_STORE_SYM`/`IR_DIV32_MUL`):
+  `dst32 = a * b` (direct assignment of a widening multiply to a 32-bit
+  variable), `some32bitvar >> N` for constant `N`, `some32bitvar / expr` /
+  `some32bitvar % expr` (16-bit divisor, result truncated to 16 bits),
+  `dst32 = ((uint32_t)hi << 16) | lo` (direct assignment composing a 32-bit
+  variable from two 16-bit halves - the inverse of the `>> N` extraction),
+  and `((T)a * (T)b) / expr` / `% expr` (an inline widening product used
+  directly as dividend, not first assigned to a 32-bit temp). Everything
+  else - `+`, `-`, `<<` used to compose a 32-bit value, compound assignment
+  (`+=` etc.), a product added to a 32-bit accumulator in the same
+  expression, 32-bit values threaded through anything but those five exact
+  shapes, function arguments/returns - is still silently wrong. Avoid
+  general 32-bit arithmetic until this is addressed.
 - **Function arguments**: only up to 4 word-sized arguments are
   supported (passed in `R4-R7`, see `docs/abi.md`). Calling or defining a
   function with more raises a compile error rather than silently spilling
