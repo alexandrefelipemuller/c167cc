@@ -171,6 +171,56 @@ static int try_gen_div32_sym(Builder *b, Expr *e, Type **out_type) {
     return i->dst;
 }
 
+static int is_cast_to_32(Expr *x) {
+    return x->kind == EXPR_CAST && (x->cast_type->kind == TY_U32 || x->cast_type->kind == TY_I32);
+}
+
+/* Sibling of try_gen_div32_sym() above for the case where the 32-bit
+   dividend is an INLINE widening product (`((uint32_t)a * (uint32_t)b) /
+   expr`) instead of an already-named 32-bit symbol - found 19/09/2026
+   auditing the "evidence of demand" cluster in the sibling Sirius32
+   project: the widening-division family (research/interpolacao_motor,
+   0x3BA56/0x3BAF2/0x3BB4C, and the 14-occurrence
+   3b536_rotina_normalizacao_divisao_32bit.c) writes the product straight
+   into the division instead of assigning it to a 32-bit temp first, so it
+   never matched try_gen_div32_sym() (whose LHS must already be
+   EXPR_IDENT) and silently divided only the low word with plain DIV/DIVU.
+   Recognizes `((T)a * (T)b) / expr` or `% expr` where at least one
+   multiply operand carries an explicit cast to a 32-bit type (same
+   "explicit cast signals widening intent" convention the examples in the
+   4 narrow fixes already use - there is no 32-bit assignment target here
+   to infer it from the way try_gen_widening_mul_store_sym() does).
+   Lowers to IR_DIV32_MUL: codegen does MULU/MUL a,b (product lands in
+   MDL:MDH for free, no store/reload needed) then DIVLU/DIVL directly -
+   see the case in codegen.c. Returns -1 if the pattern doesn't match
+   (falls through to the old, still-buggy-for-this-case path). */
+static int try_gen_div32_mul(Builder *b, Expr *e, Type **out_type) {
+    if (e->kind != EXPR_BINARY || (e->op != OP_DIV && e->op != OP_MOD)) return -1;
+    Expr *mul = e->lhs;
+    if (mul->kind != EXPR_BINARY || mul->op != OP_MUL) return -1;
+    if (!is_cast_to_32(mul->lhs) && !is_cast_to_32(mul->rhs)) return -1;
+
+    Type *lt, *rt, *dt;
+    int lv = gen_expr(b, mul->lhs, &lt);
+    int rv = gen_expr(b, mul->rhs, &rt);
+    int dv = gen_expr(b, e->rhs, &dt);
+
+    int is_signed = is_cast_to_32(mul->lhs) ? type_is_signed(mul->lhs->cast_type)
+                                             : type_is_signed(mul->rhs->cast_type);
+
+    IrInst *i = emit(b, IR_DIV32_MUL);
+    i->dst = new_vreg(b);
+    i->a = lv; i->b = rv;
+    i->args = xalloc(sizeof(int));
+    i->args[0] = dv;
+    i->nargs = 1;
+    i->op = e->op;
+    i->is_signed = is_signed;
+    i->loc = e->loc;
+    *out_type = u16_type();
+    return i->dst;
+}
+
 /* Compute address of an lvalue into a vreg (address-of semantics). Returns element type. */
 static int gen_lvalue_addr(Builder *b, Expr *e, Type **elem_type) {
     if (e->kind == EXPR_IDENT) {
@@ -528,6 +578,8 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
             if (shr32 >= 0) return shr32;
             int div32 = try_gen_div32_sym(b, e, out_type);
             if (div32 >= 0) return div32;
+            int div32m = try_gen_div32_mul(b, e, out_type);
+            if (div32m >= 0) return div32m;
             if (e->op == OP_LAND || e->op == OP_LOR) {
                 /* short-circuit evaluation */
                 char *l_rhs = fmt_label(b, e->op == OP_LAND ? "and_rhs" : "or_rhs");

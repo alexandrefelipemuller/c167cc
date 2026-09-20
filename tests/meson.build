@@ -59,6 +59,7 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
     ['calculate_global', 'examples/calculate_global.c', ['RPM=3500', 'LOAD=7'], ['OUT=17']],
     ['mul_add_global', 'examples/mul_add_global.c', ['X=6'], ['OUT=65']],
     ['div32_global', 'examples/div32_global.c', ['A=1234', 'B=777'], ['QUOC=9588', 'REM=18']],
+    ['div32_mul_global', 'examples/div32_mul_global.c', ['A=1234', 'B=777'], ['QUOC=9588', 'REM=18']],
     ['signext_byte_global', 'examples/signext_byte_global.c', ['IN=200'], ['OUT=-56']],
     ['sign_param_signed_compare_global', 'examples/sign_param_signed_compare_global.c', ['IN_S8=140'], ['OUT=1']],
     # Achado 07/09/2026 (4º bug de cast desta sessão, ver docs/limitations.md/
