@@ -5,8 +5,9 @@ NOP). Não é um simulador de propósito geral: serve pra conferir que o
 código montado por c166asm.py faz o que o .asm pretende.
 
 Memória: uma imagem plana única (o próprio .bin), lida/escrita por endereço
-de byte, little-endian pra words. MDL/MDH ficam nos endereços reais
-0xFE0C/0xFE0E - como esses ficam fora da região código+dados do .bin, a
+de byte, little-endian pra words. MDH/MDL ficam nos endereços reais
+0xFE0C/0xFE0E (MDH=0xFE0C, MDL=0xFE0E - ver MDL_ADDR abaixo) - como
+esses ficam fora da região código+dados do .bin, a
 imagem é alocada com 0x10000 bytes (64K) e o .bin é carregado no início.
 
 Uso:
@@ -22,8 +23,15 @@ usam endereço hex diretamente (ex.: 0x2A=5).
 import sys
 import re
 
-MDL_ADDR = 0xFE0C
-MDH_ADDR = 0xFE0E
+# CORRIGIDO 24/09/2026 (BUG-5 da Sirius32, docs/limitations.md): os
+# endereços estavam trocados (MDL=0xFE0C, MDH=0xFE0E). Manual do C167CR
+# (c167cr_userguide.pdf, tabela de SFR): MDH=FE0Ch (reg 06h), MDL=FE0Eh
+# (reg 07h). O código compilado não sentia (usa os nomes), mas o firmware
+# original lê/escreve MD por endereço (ex.: file 0x17AE "MOV 0xFE0E,r4;
+# DIVU r5; MOV r4,0xFE0C" = resto; file 0x16A6 "MOV 0xFE0C,r13;
+# MOV 0xFE0E,r12; DIVL r14" = dividendo r13:r12).
+MDL_ADDR = 0xFE0E
+MDH_ADDR = 0xFE0C
 SP_ADDR = 0xFE12  # SFR real do C166/C167 - mesmo endereço usado pelo boot real
                   # da Copa Clio ("MOV 0xFE12,#0xFC16"), confirmado no c166dis.py
 DEFAULT_SP = 0xFC00  # pilha cresce pra baixo a partir daqui se o programa não

@@ -162,6 +162,15 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
     args : [meson.source_root() / 'tests' / 'sim_div_test.py', sim_dir],
     workdir : meson.source_root())
 
+  # BUG-5 da Sirius32 (24/09/2026, ver docs/limitations.md): MDH=0xFE0C e
+  # MDL=0xFE0E (estavam trocados). Lê MD sempre por ENDEREÇO (ou pelo campo
+  # reg 06h/07h) após MUL/MULU/DIV/DIVU/DIVL/DIVLU, e roda bytes reais do
+  # firmware que acessam MD por endereço (file 0x1682, 0x16A2, 0x17AC).
+  test('sim-md_addr',
+    find_program('python3'),
+    args : [meson.source_root() / 'tests' / 'sim_md_addr_test.py', sim_dir],
+    workdir : meson.source_root())
+
   # BUG-2 da Sirius32 (investigado 24/09/2026, ver docs/limitations.md):
   # suspeita de que `A || B || C` não testava C quando A e B eram falsos.
   # Não se confirmou; estes 8 casos (todas as combinações V/F de A/B/C,

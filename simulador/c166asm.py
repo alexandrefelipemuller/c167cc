@@ -23,12 +23,13 @@ Layout de memória gerado:
   0x0000 .. code_end-1      : código (endereços fixos, calculados no passe 1)
   code_end (alinhado a 2)   : variáveis (uma word por padrão; NOME+2 reserva
                               mais - ver `VarTable`)
-  MDL = 0xFE0C, MDH = 0xFE0E : endereços padrão Infineon do par
-                              multiplicação/divisão (SFR), fora da área de
-                              variáveis - checar contra o mapa de SFR do
-                              derivado real se for rodar em silício de
-                              verdade; para o simulador isso não importa
-                              (o mapa de memória é todo nosso).
+  MDH = 0xFE0C, MDL = 0xFE0E : endereços reais do par multiplicação/
+                              divisão (SFR, manual do C167CR: MDH=FE0Ch/reg
+                              06h, MDL=FE0Eh/reg 07h), fora da área de
+                              variáveis. Até 24/09/2026 estavam trocados
+                              (BUG-5 da Sirius32) - o código montado não
+                              sentia, mas o firmware original acessa MD por
+                              endereço.
 
 Uso:
     python3 c166asm.py fall.asm fall.bin
@@ -38,8 +39,11 @@ Uso:
 import sys
 import re
 
-MDL_ADDR = 0xFE0C
-MDH_ADDR = 0xFE0E
+# CORRIGIDO 24/09/2026 (BUG-5 da Sirius32): estavam trocados. Manual do
+# C167CR: MDH=0xFE0C (reg 06h), MDL=0xFE0E (reg 07h) - mesmos valores do
+# c166sim.py.
+MDL_ADDR = 0xFE0E
+MDH_ADDR = 0xFE0C
 SP_ADDR = 0xFE12  # SFR real de Stack Pointer (mesmo endereço usado pelo boot
                   # real da Copa Clio - ver simulador/c166sim.py)
 SCRATCH_MEM = 6   # R6: scratch p/ imediato->memória e memória->memória

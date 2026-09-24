@@ -862,8 +862,9 @@ sinal — ver "Cobertura de opcodes" acima) desde antes desta sessão, mas
 incondicionalmente ao portar a saída do `c167cc`. Isso é semanticamente
 ERRADO sempre que um dos operandos tem o bit 15 setado (`MUL` interpreta
 como negativo, `MULU` não) — só ficou invisível até agora porque a metade
-baixa do produto (MDL, em `FE0Ch`) é bit-a-bit idêntica nos dois casos;
-quebra assim que algo lê a metade alta (MDH, `FE0Eh`), que é exatamente o
+baixa do produto (MDL, em `FE0Eh` - até o BUG-5 da Sirius32 o simulador
+usava `FE0Ch`, trocado) é bit-a-bit idêntica nos dois casos;
+quebra assim que algo lê a metade alta (MDH, `FE0Ch`), que é exatamente o
 que a leva de multiplicação-widening do `c167cc` (ver `compiler/docs/
 limitations.md`, achado no mesmo dia) passou a precisar. Corrigido
 adicionando o mnemônico `MULU` de verdade em `c166asm.py` (mesma

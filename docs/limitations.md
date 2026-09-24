@@ -6,6 +6,48 @@ assembly > optimization**.
 
 ## Fixed bugs (kept here for history)
 
+- **`MDL`/`MDH` com os endereços TROCADOS (BUG-5 da Sirius32) - corrigido
+  24/09/2026 em `simulador/c166sim.py` e `simulador/c166asm.py`; nada mudou
+  em `src/` nem no `c166dis.py` (ele imprime o endereço cru, sem nome).**
+  Os dois arquivos definiam `MDL_ADDR = 0xFE0C` e `MDH_ADDR = 0xFE0E`. O
+  manual do C167CR (`manual_3286A/c167cr_userguide.pdf`, tabela de SFR) dá
+  `MDH = FE0CH` (reg `06H`) e `MDL = FE0EH` (reg `07H`); o módulo Ghidra
+  (`c166cr.pspec`/`c167cs.pspec`) e o
+  `CONHECIMENTO_ARQUITETURA_FIRMWARE.md` (linha 69) dizem o mesmo.
+  **Evidência no firmware Scenic 2.0 16v**: `0x1682` (`MULU r4,r12 ; MOV
+  r5,0xFE0E ; CMP r5,#0x7FFF ; JMPR ugt,sat ; MOV r5,0xFE0C ; JMPR nz,sat
+  ; MOV r4,0xFE0E ; RETS`) é multiplicação saturada em `0x7FFF`: só faz
+  sentido com `0xFE0E` = produto baixo e `0xFE0C` = alto; `0x16A6` (`MOV
+  0xFE0C,r13 ; MOV 0xFE0E,r12 ; DIVL r14 ; MOV r4,0xFE0E`) monta o
+  dividendo `r13:r12` e lê o quociente; `0x17AE` (`MOV 0xFE0E,r4 ; DIVU r5
+  ; MOV r4,0xFE0C`, com `r5=3`) lê o resto. Varredura do `.bin`: as 39
+  divisões de 16 bits (`DIV`/`DIVU`) escrevem o dividendo em `0xFE0E`, e
+  as 7 escritas em `0xFE0C` precedem `DIVL`/`DIVLU` (32 bits). O código
+  gerado pelo `c167cc` não sentia (o backend emite `MOV MDL,...`/`MOV
+  ...,MDH` por NOME, e montador e simulador concordavam entre si), mas o
+  código ORIGINAL, que acessa MD por endereço, rodava com as metades
+  trocadas. **Correção**: `MDL_ADDR = 0xFE0E`, `MDH_ADDR = 0xFE0C` nos dois
+  arquivos (o campo `reg` compacto segue o endereço: `06H` = MDH, `07H` =
+  MDL). **Guarda de regressão**: `sim-md_addr` (`tests/sim_md_addr_test.py`):
+  constantes dos dois módulos; bytes montados para `MOV R4,MDL`/`MOV
+  MDH,R2` (`F2 F4 0E FE`/`F6 F2 0C FE`); após `MULU`/`MUL`/`DIVU`/`DIV`/
+  `DIVLU`/`DIVL`, o produto baixo/quociente é lido em `0xFE0E` e o produto
+  alto/resto em `0xFE0C` por instrução de endereço (nunca pelo nome), e
+  também pelo campo `reg` `06H`/`07H`; e os bytes reais de `0x1682`,
+  `0x16A2` e `0x17AC` (conferidos contra o `.bin` quando existe) executados
+  com entradas conhecidas. Com o simulador anterior o teste dá 33 falhas.
+  **Validação**: `meson test` 45/45 -> 46/46; `simulador/firmware_min`
+  remontado (`build.py`; o `.bin` antigo tinha `MDL` codificado como
+  `0xFE0C`), `functional_test.py`/`smoke_test.py` OK. Hub `file 0x3ADAA`
+  (chamador real `0x2B454`: `r12=#0x0F10`, `r13=#0x58F2`, DPPs 0x42/0x44/
+  0x43, lixo aleatório em MD/T4): com BUG-4 e BUG-5 corrigidos o resultado
+  é determinístico e igual a `tab[x/32] + (Δ·(x%32))/32` para 15 valores
+  de `x` e 8 sementes. Sirius32: `make core-all-check` 327/327,
+  `validar_aleatorio_dpp.py` 19/19 OK, `regressao_core.py` 88 OK + 5
+  ERRO_COMPILACAO (os mesmos de antes). As traduções de `Sirius32/core/`
+  que assumiam a convenção trocada NÃO foram mexidas aqui (ficam para o
+  repo Sirius32).
+
 - **`DIV`/`DIVU`/`DIVL`/`DIVLU` com o divisor lido como campo `reg`
   compacto (BUG-4 da Sirius32) - corrigido 24/09/2026 em
   `simulador/c166sim.py` e `simulador/c166asm.py` (e no `c166dis.py` não
@@ -53,8 +95,8 @@ assembly > optimization**.
   BUG-3 (Trap em `91 F1`): remontado numa cópia em `/tmp`,
   `functional_test.py` OK. Sirius32: `make core-all-check` 327/327,
   `validar_aleatorio_dpp.py` 19/19 OK, `regressao_core.py` 88 OK + 5
-  ERRO_COMPILACAO (mesmos preexistentes). **Não corrigido (achado nesta
-  investigação, bug separado)**: `MDL_ADDR`/`MDH_ADDR` estão TROCADOS no
+  ERRO_COMPILACAO (mesmos preexistentes). **Não corrigido aqui (achado nesta
+  investigação, bug separado; corrigido depois como BUG-5, entrada acima)**: `MDL_ADDR`/`MDH_ADDR` estão TROCADOS no
   `c166sim.py` e no `c166asm.py` (`MDL = 0xFE0C`, `MDH = 0xFE0E`); o manual
   do C167 dá `MDH = FE0CH` e `MDL = FE0EH`, e o firmware usa assim
   (`0x16A6`: `MOV 0xFE0C,r13 ; MOV 0xFE0E,r12 ; DIVL R14 ; ... MOV
