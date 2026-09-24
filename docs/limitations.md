@@ -6,6 +6,64 @@ assembly > optimization**.
 
 ## Fixed bugs (kept here for history)
 
+- **`DIV`/`DIVU`/`DIVL`/`DIVLU` com o divisor lido como campo `reg`
+  compacto (BUG-4 da Sirius32) - corrigido 24/09/2026 em
+  `simulador/c166sim.py` e `simulador/c166asm.py` (e no `c166dis.py` não
+  versionado de `ferramentas_disassembly/`, backup `c166dis.py.bak_bug4`);
+  nada mudou em `src/`.** O manual Infineon (`imagens_siemens/c166ism.pdf`,
+  p.72-75) documenta `DIV Rwn` = `4B nn`, `DIVU` = `5B nn`, `DIVL` =
+  `6B nn`, `DIVLU` = `7B nn`: o registrador divisor vem REPETIDO nos dois
+  nibbles do 2º byte. O simulador lia esse byte como o campo `reg` de
+  `ADD reg,mem` (`>= 0xF0` = GPR, senão SFR `0xFE00 + 2*b`) e o montador
+  emitia a forma própria `xB Fn` (no C167 real só `xB FF` = R15 é válida
+  nessa forma). **Evidência no firmware Scenic 2.0 16v**: hub `file
+  0x3ADAA` (168 chamadores): `5B 55` em `0x3ADB6` é `DIVU R5` (saía
+  "`DIVU 0xFEAA`", SFR que lê 0 -> V=1 e MDL intacto) e `4B 22` em
+  `0x3ADE0` é `DIV R2` (saía "`DIV 0xFE44`", T4); `6B EE` em `0x16AE` é
+  `DIVL R14`, logo depois de `CMP r14,#0 ; JMPR cc_Z` (o código testa o
+  divisor R14 antes de dividir). Varredura linear (`disasm.all_instr`):
+  82 na forma `nn` (11 `DIV`, 31 `DIVU`, 1 `DIVL`, 39 `DIVLU`, em
+  R0/R2/R4/R5/R6/R9-R15); 77 delas saíam como SFR e 6 (`DIVLU R15`,
+  `7B FF`) saíam certas por coincidência; 1 ocorrência com nibbles
+  diferentes (`6B 1D` em `0x11E90`) cai em tabela de dados. A "correção de
+  19/08/2026" do kind `'Rw'` no `c166dis.py` (que trocou `DIVU r5` por
+  `DIVU 0xFEAA` para "bater com o simulador") estava errada: o texto antigo
+  era o certo, o simulador é que estava errado. **Correção**: montador
+  emite `xB nn`; simulador decodifica só a forma real e dá `Trap` explícito
+  se os nibbles forem diferentes (sem aceitar os dois formatos, igual ao
+  BUG-3); os 4 handlers viraram 1, com divisão inteira pura (antes
+  `int(a/b)` em float), quociente truncado pra zero e resto com o sinal do
+  dividendo, e flags do manual: E=0, C=0, Z/N do quociente (antes não
+  mexia em Z/N), V=1 se o quociente não cabe numa word ou se o divisor é 0
+  (nesse caso MDL/MDH ficam como estavam: o manual diz só que o resultado
+  "não é válido"). `tests/port_to_toy_asm.py` deixou de renomear `DIVU`
+  para `DIV` (resto da época em que o montador não tinha `DIVU`, e que
+  escondia a divisão sem sinal: 50000/7 virava -15536/7). **Guardas de
+  regressão**: `sim-div_encoding` (`tests/sim_div_test.py`: bytes montados
+  e execução em R0/R5/R15, quociente/resto, sinal, overflow, divisor 0,
+  bytes reais `5B 55`/`4B 22`/`6B EE` conferidos também contra o `.bin` e
+  o `c166dis.py` quando existem, Trap para nibbles diferentes),
+  `sim-div_mod_global` e `sim-div_mod_global_neg_divisor`
+  (`examples/div_mod_global.c`, caminho c167cc -> c166asm -> c166sim de `/`
+  e `%` em `uint16_t`, `int16_t` e `uint32_t/uint16_t`). **Validação**:
+  `meson test` 42/42 -> 45/45; `simulador/firmware_min` (sem DIV)
+  `smoke_test.py`/`functional_test.py` OK sem remontar; o
+  `firmware_min/firmware_full.bin` da Sirius32 (versionado lá, não mexido)
+  tem 2 `DIV R0` na forma antiga `4B F0` e já estava desatualizado desde o
+  BUG-3 (Trap em `91 F1`): remontado numa cópia em `/tmp`,
+  `functional_test.py` OK. Sirius32: `make core-all-check` 327/327,
+  `validar_aleatorio_dpp.py` 19/19 OK, `regressao_core.py` 88 OK + 5
+  ERRO_COMPILACAO (mesmos preexistentes). **Não corrigido (achado nesta
+  investigação, bug separado)**: `MDL_ADDR`/`MDH_ADDR` estão TROCADOS no
+  `c166sim.py` e no `c166asm.py` (`MDL = 0xFE0C`, `MDH = 0xFE0E`); o manual
+  do C167 dá `MDH = FE0CH` e `MDL = FE0EH`, e o firmware usa assim
+  (`0x16A6`: `MOV 0xFE0C,r13 ; MOV 0xFE0E,r12 ; DIVL R14 ; ... MOV
+  r4,0xFE0E`). Compilado × montado é coerente (os dois usam o nome), mas o
+  código ORIGINAL que acessa MD por endereço roda errado: o hub `0x3ADAA`
+  continua não-determinístico só com o BUG-4 corrigido; com os dois
+  corrigidos ele dá `tab[x/passo] + (Δ·(x%passo))/passo` exato
+  (interpolação linear com passo `*r13`).
+
 - **`NEG`/`CPL`/`NEGB`/`CPLB` com o registrador no nibble errado (BUG-3
   da Sirius32) - corrigido 24/09/2026 em `simulador/c166sim.py` e
   `simulador/c166asm.py` (e no `c166dis.py` não versionado de

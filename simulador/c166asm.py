@@ -755,9 +755,15 @@ class Asm:
             # variantes tinham reconhecimento de sintaxe/tamanho mas caiam
             # sempre no opcode de DIV (0x4B) na hora de gerar bytes,
             # silenciosamente rodando a divisão errada no simulador.
+            # CORRIGIDO 24/09/2026 (BUG-4 da Sirius32, ver docs/limitations.md):
+            # a codificação real do manual é "xB nn" (registrador REPETIDO nos
+            # dois nibbles). Antes emitia "xB Fn" (forma de byte 'reg'
+            # compacto) - só coincidia com o c166sim.py antigo; no C167 real
+            # "5B F4" é inválido e só "5B FF" (DIVU R15) coincidia.
             (r,) = operands
             opcode = {'DIV': 0x4B, 'DIVU': 0x5B, 'DIVL': 0x6B, 'DIVLU': 0x7B}[mnemonic]
-            return bytes([opcode, 0xF0 | r[1]])
+            n = r[1] & 0xF
+            return bytes([opcode, (n << 4) | n])
 
         if mnemonic == 'EXTP':
             # "EXTP Rw,#irang" (forma registrador, opcode 0xDC) - byte2 =

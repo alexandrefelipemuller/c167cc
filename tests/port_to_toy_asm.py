@@ -17,9 +17,11 @@ question being validated - can be assembled and simulated by that tool:
     `L<N>`, which is semantically identical to a stack slot for a
     straight-line/single-invocation run (same distinct memory location per
     offset, just not on the call stack);
-  - renames MULU/DIVU to MUL/DIV (the toy assembler only implements the
-    signed mnemonics; for the small positive values used in these checks
-    the result is identical);
+  - renames MULU to MUL (for the small positive values used in these
+    checks the result is identical). DIVU is NOT renamed anymore (BUG-4 of
+    Sirius32, 24/09/2026): c166asm.py has encoded DIVU/DIVL/DIVLU since
+    03/09/2026, and renaming it to the signed DIV hid unsigned-division
+    behaviour (e.g. 50000/7 came out as -15536/7);
   - strips the leading '.' from local labels (the toy assembler's label
     regex is `\\w+`, which does not include '.');
   - replaces the trailing RET with NOP, which is c166sim.py's convention
@@ -59,7 +61,7 @@ def port(asm_text: str, func_label: str) -> str:
         if mnemonic == "MOV" and code.replace(" ", "") == "MOV R15,SP".replace(" ", ""):
             continue
         code = re.sub(r"\[R15\+#(\d+)\]", r"L\1", code)
-        code = code.replace("MULU", "MUL").replace("DIVU", "DIV")
+        code = code.replace("MULU", "MUL")
         code = re.sub(r"\.L(\w+)", r"L\1", code)
         out.append(code)
 

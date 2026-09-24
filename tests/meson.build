@@ -116,6 +116,16 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
     # montados na codificação real "81 n0"/"91 n0" - garante que o caminho
     # c167cc -> c166asm -> c166sim de `-x`/`~x` continua coerente.
     ['neg_cpl_global', 'examples/neg_cpl_global.c', ['A=4660'], ['OUT_NEG=-4660', 'OUT_CPL=-4661']],
+    # BUG-4 da Sirius32 (24/09/2026, ver docs/limitations.md): DIV/DIVU/DIVL/
+    # DIVLU agora montados na codificação real "xB nn". `/` e `%` em
+    # uint16_t (50000/7: só passa se for DIVU de verdade - o sinal de 0xC350
+    # daria -2219), int16_t com dividendo e com divisor negativos
+    # (truncamento pra zero, resto com o sinal do dividendo) e uint32_t/
+    # uint16_t com MDH != 0 (1000000/300 = 3333 resto 100). A saída do
+    # simulador imprime tudo como int16.
+    ['div_mod_global', 'examples/div_mod_global.c',
+     ['UA=50000', 'UB=7', 'SA=-1000', 'SB=7', 'LHI=15', 'LLO=16960', 'LB=300'],
+     ['OUT_UQ=7142', 'OUT_UR=6', 'OUT_SQ=-142', 'OUT_SR=-6', 'OUT_LQ=3333', 'OUT_LR=100']],
   ]
   foreach c : sim_cases
     test('sim-' + c[0],
@@ -131,6 +141,25 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
   test('sim-cpl_neg_encoding',
     find_program('python3'),
     args : [meson.source_root() / 'tests' / 'sim_cpl_neg_test.py', sim_dir],
+    workdir : meson.source_root())
+
+  # BUG-4 da Sirius32 (24/09/2026, ver docs/limitations.md): DIV/DIVU/
+  # DIVL/DIVLU com o divisor repetido nos dois nibbles ("xB nn", manual
+  # Infineon), em R0/R5/R15, quociente/resto, sinal, overflow, divisor 0,
+  # e os bytes reais do firmware ("5B 55" = DIVU R5, "4B 22" = DIV R2).
+  # Mesma função de sim-div_mod_global, outro conjunto de entradas (fica
+  # fora de sim_cases porque lá o nome do teste é também o label da função):
+  # divisor int16_t negativo, uint16_t 0xFFFF/256 e dividendo 32 bits < divisor.
+  test('sim-div_mod_global_neg_divisor',
+    find_program('sim_validate.sh'),
+    args : [c167cc_exe.full_path(), meson.source_root() / 'examples' / 'div_mod_global.c',
+            'div_mod_global', 'UA=65535', 'UB=256', 'SA=1000', 'SB=-7', 'LHI=0', 'LLO=299', 'LB=300',
+            '--', 'OUT_UQ=255', 'OUT_UR=255', 'OUT_SQ=-142', 'OUT_SR=6', 'OUT_LQ=0', 'OUT_LR=299'],
+    workdir : meson.source_root())
+
+  test('sim-div_encoding',
+    find_program('python3'),
+    args : [meson.source_root() / 'tests' / 'sim_div_test.py', sim_dir],
     workdir : meson.source_root())
 
   # BUG-2 da Sirius32 (investigado 24/09/2026, ver docs/limitations.md):

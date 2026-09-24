@@ -1294,68 +1294,62 @@ class Sim:
             self.pc += 2
             return True
 
-        if op == 0x4B:  # DIV reg (signed, MDL / reg)
+        if op in (0x4B, 0x5B, 0x6B, 0x7B):  # DIV/DIVU/DIVL/DIVLU Rwn
+            # CORRIGIDO 24/09/2026 (BUG-4 da Sirius32, docs/limitations.md):
+            # o manual Infineon (c166ism.pdf, p.72-75) documenta "4B nn"
+            # (DIV Rwn), "5B nn" (DIVU), "6B nn" (DIVL) e "7B nn" (DIVLU): o
+            # registrador divisor vem REPETIDO nos dois nibbles do 2º byte -
+            # NÃO é o byte 'reg' compacto (SFR/GPR) de ADD/MOV reg,mem. Antes
+            # o simulador usava read_regfield16(b), então o "5B 55" real
+            # (DIVU R5, file 0x3ADB6 da Scenic, hub de curva 1D com 168
+            # chamadores) dividia pelo SFR 0xFEAA (lê 0 -> V=1, MDL intacto)
+            # e o "4B 22" (DIV R2, 0x3ADE0) pelo SFR 0xFE44; e o c166asm.py
+            # emitia uma forma própria "xB Fn" que, na codificação real, é
+            # inválida (n != F) ou R15 (só "xB FF"). Agora montador e
+            # simulador usam só a forma real "nn"; nibbles diferentes são
+            # Trap explícito (mesma política do BUG-3).
             b = self.mem[pc + 1]
-            divisor = self.read_regfield16(b)
-            divisor_s = divisor - 0x10000 if divisor >= 0x8000 else divisor
+            if (b >> 4) != (b & 0xF):
+                raise Trap(f"codificação inválida em pc=0x{pc:04X}: {op:02X} {b:02X} "
+                           f"(DIV/DIVU/DIVL/DIVLU exigem 2º byte 'nn' - nibbles iguais)")
+            divisor = self.r[b & 0xF]
             mdl = self.get_special(MDL_ADDR)
-            mdl_s = mdl - 0x10000 if mdl >= 0x8000 else mdl
-            if divisor_s == 0:
+            signed = op in (0x4B, 0x6B)
+            if op in (0x4B, 0x5B):
+                dividend = mdl                       # 16/16: só MDL
+                if signed and dividend >= 0x8000:
+                    dividend -= 0x10000
+            else:
+                dividend = (self.get_special(MDH_ADDR) << 16) | mdl   # 32/16: MD
+                if signed and dividend >= 0x80000000:
+                    dividend -= 0x100000000
+            if signed and divisor >= 0x8000:
+                divisor -= 0x10000
+            if divisor == 0:
+                # Manual: V=1, C=0, E=0; "o resultado em MDH e MDL não é
+                # válido" - ver _div_by_zero (MDL/MDH ficam como estavam).
                 self._div_by_zero()
             else:
-                q = int(mdl_s / divisor_s)
-                rem = mdl_s - q * divisor_s
+                # Quociente truncado em direção a zero e resto com o sinal do
+                # dividendo (divisão inteira de hardware / C). Aritmética
+                # inteira pura (nada de float: int(a/b) perde precisão em 32
+                # bits).
+                q = abs(dividend) // abs(divisor)
+                if (dividend < 0) != (divisor < 0):
+                    q = -q
+                rem = dividend - q * divisor
                 self.set_special(MDL_ADDR, q & 0xFFFF)
                 self.set_special(MDH_ADDR, rem & 0xFFFF)
-                self.flags['V'] = not (-0x8000 <= q <= 0x7FFF)
+                # Flags (manual): E=0, C=0, Z/N do resultado (MDL), V=1 se o
+                # quociente não cabe numa word (só possível em DIVL/DIVLU, e
+                # em DIV com 0x8000 / -1).
+                if signed:
+                    self.flags['V'] = not (-0x8000 <= q <= 0x7FFF)
+                else:
+                    self.flags['V'] = q > 0xFFFF
                 self.flags['C'] = False
-            self.pc += 2
-            return True
-
-        if op == 0x6B:  # DIVL reg (com sinal, MD de 32 bits / reg de 16 bits)
-            b = self.mem[pc + 1]
-            divisor = self.read_regfield16(b)
-            divisor_s = divisor - 0x10000 if divisor >= 0x8000 else divisor
-            md = (self.get_special(MDH_ADDR) << 16) | self.get_special(MDL_ADDR)
-            md_s = md - 0x100000000 if md >= 0x80000000 else md
-            if divisor_s == 0:
-                self._div_by_zero()
-            else:
-                q = int(md_s / divisor_s)
-                rem = md_s - q * divisor_s
-                self.set_special(MDL_ADDR, q & 0xFFFF)
-                self.set_special(MDH_ADDR, rem & 0xFFFF)
-                self.flags['V'] = not (-0x8000 <= q <= 0x7FFF)
-                self.flags['C'] = False
-            self.pc += 2
-            return True
-
-        if op == 0x7B:  # DIVLU reg (sem sinal, MD de 32 bits / reg de 16 bits)
-            b = self.mem[pc + 1]
-            divisor = self.read_regfield16(b)
-            md = (self.get_special(MDH_ADDR) << 16) | self.get_special(MDL_ADDR)
-            if divisor == 0:
-                self._div_by_zero()
-            else:
-                q = md // divisor
-                self.set_special(MDL_ADDR, q & 0xFFFF)
-                self.set_special(MDH_ADDR, (md % divisor) & 0xFFFF)
-                self.flags['V'] = q > 0xFFFF
-                self.flags['C'] = False
-            self.pc += 2
-            return True
-
-        if op == 0x5B:  # DIVU reg (sem sinal, MDL / reg)
-            b = self.mem[pc + 1]
-            divisor = self.read_regfield16(b)
-            mdl = self.get_special(MDL_ADDR)
-            if divisor == 0:
-                self._div_by_zero()
-            else:
-                self.set_special(MDL_ADDR, (mdl // divisor) & 0xFFFF)
-                self.set_special(MDH_ADDR, (mdl % divisor) & 0xFFFF)
-                self.flags['V'] = False
-                self.flags['C'] = False
+                self.flags['Z'] = (q & 0xFFFF) == 0
+                self.flags['N'] = (q & 0x8000) != 0
             self.pc += 2
             return True
 
