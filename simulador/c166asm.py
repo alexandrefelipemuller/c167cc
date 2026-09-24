@@ -733,13 +733,18 @@ class Asm:
                 out += bytes([v & 0xFF, (v >> 8) & 0xFF])
             return bytes(out)
 
+        # NEG/CPL Rwn: codificação real do manual Infineon "81 n0"/"91 n0"
+        # (registrador no nibble ALTO, baixo=0). CORRIGIDO 24/09/2026 (BUG-3
+        # da Sirius32, ver docs/limitations.md): antes emitia "81 Fn"/"91 Fn"
+        # (forma de byte 'reg' compacto) - só coincidia com o c166sim.py
+        # antigo; no C167 real "91 F0" é CPL R15, não CPL R0.
         if mnemonic == 'NEG':
             (r,) = operands
-            return bytes([0x81, 0xF0 | r[1]])
+            return bytes([0x81, (r[1] & 0xF) << 4])
 
         if mnemonic == 'CPL':
             (r,) = operands
-            return bytes([0x91, 0xF0 | r[1]])
+            return bytes([0x91, (r[1] & 0xF) << 4])
 
         if mnemonic in ('DIV', 'DIVU', 'DIVL', 'DIVLU'):
             # Opcodes reais (manual Infineon, tabela 21-x): DIV=0x4B (com

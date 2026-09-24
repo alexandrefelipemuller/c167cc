@@ -1460,9 +1460,46 @@ class Sim:
             self.pc += 2
             return True
 
-        if op == 0x81:  # NEG reg
+        if op in (0x81, 0x91, 0xA1, 0xB1):  # NEG/CPL Rwn, NEGB/CPLB Rbn
+            # CORRIGIDO 24/09/2026 (BUG-3 da Sirius32, docs/limitations.md):
+            # o manual Infineon (c166ism.pdf) documenta estas 4 como "81 n0"
+            # (NEG Rwn), "91 n0" (CPL Rwn), "A1 n0" (NEGB Rbn) e "B1 n0"
+            # (CPLB Rbn): o registrador vem no NIBBLE ALTO do 2º byte e o
+            # baixo é sempre 0 - NÃO é o byte 'reg' compacto (SFR/GPR) de
+            # ADD/MOV reg,mem. Antes o simulador usava read_regfield16(b),
+            # então o "91 D0" real (CPL R13, file 0x27D1E da Scenic) virava
+            # CPL no SFR 0xFFA0 e deixava R13 intacto; e o c166asm.py emitia
+            # uma forma própria "91 Fn" que, na codificação real, é CPL R15
+            # (só "91 F0") ou inválida (n != 0). Agora montador e simulador
+            # usam só a forma real "n0"; nibble baixo != 0 é Trap explícito
+            # (nada de aceitar os dois formatos: "91 F0" é R15, sem ambiguidade).
             b = self.mem[pc + 1]
-            self.write_regfield16(b, (-self.read_regfield16(b)) & 0xFFFF)
+            if b & 0xF:
+                raise Trap(f"codificação inválida em pc=0x{pc:04X}: {op:02X} {b:02X} "
+                           f"(NEG/CPL/NEGB/CPLB exigem 2º byte 'n0' - nibble baixo 0)")
+            n = (b >> 4) & 0xF
+            if op in (0x81, 0x91):
+                width, mask, sign = 16, 0xFFFF, 0x8000
+                a = self.r[n]
+            else:
+                width, mask, sign = 8, 0xFF, 0x80
+                a = self.get_breg(n)
+            if op in (0x81, 0xA1):
+                # NEG/NEGB: op1 <- 0 - op1; flags como subtração 0 - op1
+                # (manual: Z, N, V=estouro, C=borrow).
+                val = (-a) & mask
+                self.update_flags_sub(0, a, val, width=width)
+            else:
+                # CPL/CPLB: op1 <- ~op1; manual: Z, N, V=0, C=0.
+                val = (~a) & mask
+                self.flags['Z'] = val == 0
+                self.flags['N'] = (val & sign) != 0
+                self.flags['V'] = False
+                self.flags['C'] = False
+            if width == 16:
+                self.r[n] = val
+            else:
+                self.set_breg(n, val)
             self.pc += 2
             return True
 
@@ -1519,14 +1556,6 @@ class Sim:
             else:
                 self.write_regfield16(regb, res)
             self.pc += 4
-            return True
-
-        if op == 0x91:  # CPL reg (complemento de 1)
-            b = self.mem[pc + 1]
-            val = (~self.read_regfield16(b)) & 0xFFFF
-            self.write_regfield16(b, val)
-            self.flags['Z'] = val == 0
-            self.pc += 2
             return True
 
         if op == 0xF1:  # MOVB Rbn,Rbm ("F1 nm": destino=nibble alto, fonte=baixo)

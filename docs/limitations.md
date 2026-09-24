@@ -6,6 +6,52 @@ assembly > optimization**.
 
 ## Fixed bugs (kept here for history)
 
+- **`NEG`/`CPL`/`NEGB`/`CPLB` com o registrador no nibble errado (BUG-3
+  da Sirius32) - corrigido 24/09/2026 em `simulador/c166sim.py` e
+  `simulador/c166asm.py` (e no `c166dis.py` não versionado de
+  `ferramentas_disassembly/`); nada mudou em `src/`.** O manual Infineon
+  (`imagens_siemens/c166ism.pdf`, "Instruction Set Detailed Description")
+  documenta `NEG Rwn` = `81 n0`, `CPL Rwn` = `91 n0`, `NEGB Rbn` = `A1 n0`
+  e `CPLB Rbn` = `B1 n0`: registrador no NIBBLE ALTO do 2º byte, nibble
+  baixo 0. O simulador lia esse byte como o campo `reg` compacto de
+  `ADD reg,mem` (`>= 0xF0` = GPR pelo nibble baixo, senão SFR
+  `0xFE00 + 2*b`), e `NEGB`/`CPLB` nem existiam (Trap de opcode). O
+  `c166asm.py` emitia uma forma própria `81 Fn`/`91 Fn`, coerente só com
+  esse simulador: no C167 real `91 F0` é `CPL R15` (não `R0`) e `91 F1..FF`
+  é inválido. **Evidência no firmware Scenic 2.0 16v**: `91 D0` em file
+  `0x27D1E` (`CPL R13`, saía "CPL 0xFFA0" e deixava R13 intacto - a
+  rotina `0x27D02` zerava os 20 bytes `0xFD22-0xFD35` em vez de limpar só
+  os bits da tabela); `81 40 18 50 81 50` em `0x272E4` (`NEG R4 ; ADDC
+  R5,#0 ; NEG R5`, negação de 32 bits); `81 F0` em `0x2EF3E/0x2EF58/
+  0x2EF70` (`NEG R15`, lido antes como `NEG R0`). Varredura linear
+  (`disasm.all_instr`): 32 `CPL`, 104 `NEG` (101 com 2º byte `< 0xF0` +
+  3 `NEG R15`), 15 `CPLB`, 4 `NEGB` na forma `n0`; as 5 ocorrências com
+  nibble baixo `!= 0` (`0x1159A..0x11772`) caem em tabela de dados.
+  **Correção**: montador emite `81 n0`/`91 n0`; simulador decodifica só a
+  forma real (`n = b >> 4`) e dá `Trap` explícito se o nibble baixo não
+  for 0 - sem aceitar os dois formatos, então `.bin` antigos montados com
+  a forma `Fn` precisam ser remontados (os `.bin` do repo são todos
+  gerados/ignorados pelo git; o `firmware_min/firmware_full.bin` antigo
+  dá Trap em `pc=0x10BE` até rodar `build.py` de novo). Flags agora
+  conforme o manual: `NEG`/`NEGB` = subtração `0 - op` (Z, N, C=borrow,
+  V=estouro); `CPL`/`CPLB` = Z, N, C=0, V=0 (antes `NEG` não mexia em
+  flag nenhuma e `CPL` só em Z). **Guardas de regressão**:
+  `sim-cpl_neg_encoding` (`tests/sim_cpl_neg_test.py`: bytes montados e
+  execução de NEG/CPL em R0/R4/R13/R15, NEGB/CPLB em RL0/RH0/RL7/RH7 com
+  flags, bytes reais `91 D0`/`81 F0`/`81 40 18 50 81 50`, Trap pra nibble
+  baixo != 0) e `sim-neg_cpl_global` (`examples/neg_cpl_global.c`,
+  caminho c167cc -> c166asm -> c166sim de `-x`/`~x`). **Validação**:
+  `meson test` 40/40 -> 42/42; `firmware_min` `functional_test.py` e
+  `smoke_test.py` OK após `build.py`; Sirius32: `make core-all-check`
+  327/327, `validar_aleatorio_dpp.py` 19/19 OK, `regressao_core.py` 88 OK
+  + 5 ERRO_COMPILACAO (mesmos preexistentes); a rotina original `0x27D02`
+  sem monkeypatch agora bate com o esperado calculado da tabela
+  (file `0x11972`). **Não corrigido (mesma classe, fora do escopo)**:
+  `DIV`/`DIVU`/`DIVL`/`DIVLU` são `4B/5B/6B/7B nn` no manual (registrador
+  repetido nos dois nibbles), mas simulador e `c166dis.py` ainda os leem
+  como campo `reg` compacto (`5B 55` vira divisor SFR `0xFEAA`, não R5) e
+  o montador emite `xB Fn`.
+
 - **`||`/`&&` encadeado com 3+ termos (BUG-2 da Sirius32) - investigado
   24/09/2026, NÃO é bug do compilador; nada mudou em `src/`.** Suspeita
   (21/09/2026, `docs/BUGS_C167CC.md` da Sirius32, file `0x2F1C2`,

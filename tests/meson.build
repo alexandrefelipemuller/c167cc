@@ -112,6 +112,10 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
     # verdade por esse cast, não só o parse (isso já é coberto pelo golden
     # golden-cast_qualifier_fixed_addr acima).
     ['cast_qualifier_sfr_global', 'examples/cast_qualifier_sfr_global.c', ['IN=1234'], ['OUT=1234']],
+    # BUG-3 da Sirius32 (24/09/2026, ver docs/limitations.md): NEG/CPL agora
+    # montados na codificação real "81 n0"/"91 n0" - garante que o caminho
+    # c167cc -> c166asm -> c166sim de `-x`/`~x` continua coerente.
+    ['neg_cpl_global', 'examples/neg_cpl_global.c', ['A=4660'], ['OUT_NEG=-4660', 'OUT_CPL=-4661']],
   ]
   foreach c : sim_cases
     test('sim-' + c[0],
@@ -119,6 +123,15 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
       args : [c167cc_exe.full_path(), meson.source_root() / c[1], c[0]] + c[2] + ['--'] + c[3],
       workdir : meson.source_root())
   endforeach
+
+  # BUG-3 da Sirius32 (24/09/2026, ver docs/limitations.md): NEG/CPL/NEGB/
+  # CPLB decodificados com o registrador no nibble ALTO ("n0", manual
+  # Infineon), em R0/R15/RL0/RH7 etc., flags, e os bytes reais do firmware
+  # ("91 D0" = CPL R13, "81 40 18 50 81 50" = negação de 32 bits).
+  test('sim-cpl_neg_encoding',
+    find_program('python3'),
+    args : [meson.source_root() / 'tests' / 'sim_cpl_neg_test.py', sim_dir],
+    workdir : meson.source_root())
 
   # BUG-2 da Sirius32 (investigado 24/09/2026, ver docs/limitations.md):
   # suspeita de que `A || B || C` não testava C quando A e B eram falsos.
