@@ -261,6 +261,37 @@ static int try_gen_div32_mul(Builder *b, Expr *e, Type **out_type) {
     return i->dst;
 }
 
+/* Base de uma indexação `base[i]`: devolve o vreg com o ENDEREÇO base e,
+   em `*elem_type`, o tipo do elemento (que define a escala do índice e o
+   tamanho do acesso).
+
+   BUG-1 (achado 21/09/2026 na Sirius32, corrigido 24/09/2026): indexar um
+   identificador declarado ESCALAR inteiro (`@ram(0x1356) volatile uint8_t
+   calib_1356;` seguido de `calib_1356[i]`) caía em `gen_expr(base)`, que
+   CARREGAVA O VALOR do escalar e o usava como ponteiro, e - sem `pointee`
+   - assumia elemento uint16_t (índice *2, MOV word). O firmware
+   reimplementado usa esse idioma pra tabelas @ram de bytes declaradas como
+   escalar, então não vira erro: o escalar é tratado como base de uma
+   tabela do PRÓPRIO tipo, como se fosse `(&x)[i]` - endereço do símbolo,
+   índice escalado por sizeof(tipo) (uint8_t: *1 + MOVB; uint16_t: *2 +
+   MOV), exatamente igual a declarar `x[N]`. */
+static int gen_index_base(Builder *b, Expr *base_e, Type **elem_type) {
+    if (base_e->kind == EXPR_IDENT) {
+        Symbol *sym = scope_lookup(b->scope, base_e->name);
+        if (sym && !sym->type->is_array && sym->type->kind >= TY_I8 && sym->type->kind <= TY_U32) {
+            base_e->sym = sym;
+            IrInst *i = emit(b, IR_LOAD_ADDR);
+            i->dst = new_vreg(b); i->sym = sym; i->loc = base_e->loc;
+            *elem_type = sym->type;
+            return i->dst;
+        }
+    }
+    Type *basety;
+    int base = gen_expr(b, base_e, &basety);
+    *elem_type = basety->pointee ? basety->pointee : u16_type();
+    return base;
+}
+
 /* Compute address of an lvalue into a vreg (address-of semantics). Returns element type. */
 static int gen_lvalue_addr(Builder *b, Expr *e, Type **elem_type) {
     if (e->kind == EXPR_IDENT) {
@@ -279,9 +310,8 @@ static int gen_lvalue_addr(Builder *b, Expr *e, Type **elem_type) {
         *elem_type = ptrty->pointee ? ptrty->pointee : u16_type();
         return p;
     } else if (e->kind == EXPR_INDEX) {
-        Type *basety;
-        int base = gen_expr(b, e->base, &basety);
-        Type *elemty = basety->pointee ? basety->pointee : u16_type();
+        Type *elemty;
+        int base = gen_index_base(b, e->base, &elemty);
         Type *ixty;
         int idx = gen_expr(b, e->index, &ixty);
         int esz = type_bytes(elemty);
@@ -582,9 +612,8 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
             return ld->dst;
         }
         case EXPR_INDEX: {
-            Type *basety;
-            int base = gen_expr(b, e->base, &basety);
-            Type *elemty = basety->pointee ? basety->pointee : u16_type();
+            Type *elemty;
+            int base = gen_index_base(b, e->base, &elemty);
             Type *ixty;
             int idx = gen_expr(b, e->index, &ixty);
             int esz = type_bytes(elemty);

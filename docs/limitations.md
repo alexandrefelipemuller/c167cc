@@ -6,6 +6,36 @@ assembly > optimization**.
 
 ## Fixed bugs (kept here for history)
 
+- **Indexar um identificador declarado ESCALAR inteiro (BUG-1 da
+  Sirius32)**, ex. `@ram(0x1356) volatile uint8_t calib_1356;` seguido de
+  `calib_1356[i]` (achado 21/09/2026 na Sirius32 - `docs/BUGS_C167CC.md`
+  de lá, `core/motor_geral/detonacao_adaptativa_lote33.c`, file
+  `0x2E2E6`; corrigido 24/09/2026). Gerava `MOVB R0, calib_1356` (o
+  VALOR do escalar usado como ponteiro), multiplicava o índice por 2
+  (`MULU`) e lia/escrevia com `MOV` (word) - byte errado, em silêncio,
+  tanto em leitura quanto em escrita; o escalar `uint16_t` indexado
+  também usava o valor como endereço. **Causa raiz**: os dois pontos que
+  tratam `EXPR_INDEX` em `src/ir/ir_build.c` (`gen_lvalue_addr` pra
+  escrita/endereço e `gen_expr` pra leitura) faziam `gen_expr(e->base)`
+  - que só decai pra endereço quando o símbolo é array/função - e, sem
+  `pointee` no tipo resultante, caíam no fallback `u16_type()` como tipo
+  do elemento. **Correção**: novo helper `gen_index_base()` usado pelos
+  dois pontos: se a base é um `EXPR_IDENT` de tipo inteiro escalar
+  (`TY_I8`..`TY_U32`, não array), emite `IR_LOAD_ADDR` do símbolo e usa o
+  PRÓPRIO tipo do escalar como elemento - semântica `(&x)[i]`, idêntica a
+  declarar `x[N]` (uint8_t: índice *1 + `MOVB`; uint16_t: *2 + `MOV`;
+  o `.asm` gerado é byte a byte igual ao da versão array, exceto o
+  comentário do `EQU`). Não vira erro de compilação porque o código
+  reimplementado da Sirius32 usa esse idioma. Ponteiro/array continuam
+  pelo caminho antigo. **Fora do escopo** (comportamento inalterado):
+  base escalar que não é identificador simples (campo de struct,
+  `(*p)[i]`, expressão) ainda cai no fallback antigo.
+  **Validação**: `meson test`: 30/30 -> 31/31 (novo
+  `golden-index_scalar_ram`, `examples/index_scalar_ram.c`: leitura e
+  escrita indexada de escalar `uint8_t` e `uint16_t`); Sirius32:
+  `make core-all-check` 327/327 OK, `validar_aleatorio_dpp.py` todas OK,
+  `regressao_core.py` 88 OK + 5 ERRO_COMPILACAO (mesmos preexistentes).
+
 - **A type qualifier (`const`/`volatile`) inside an expression cast to
   pointer type was rejected by the parser**, e.g. `(volatile uint16_t
   *)0xFD90` or `(const uint16_t *)&x` failed with `error: syntax error

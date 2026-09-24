@@ -15,6 +15,8 @@ golden_examples = [
   'call_liveness',
   'pointer_arith_scaling_array',
   'cast_qualifier_fixed_addr',
+  # BUG-1 (24/09/2026): @ram escalar indexado (uint8_t: *1 + MOVB; uint16_t: *2 + MOV).
+  'index_scalar_ram',
 ]
 
 foreach name : golden_examples
