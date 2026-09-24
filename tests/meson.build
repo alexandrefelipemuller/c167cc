@@ -17,6 +17,9 @@ golden_examples = [
   'cast_qualifier_fixed_addr',
   # BUG-1 (24/09/2026): @ram escalar indexado (uint8_t: *1 + MOVB; uint16_t: *2 + MOV).
   'index_scalar_ram',
+  # BUG-2 (24/09/2026, investigado - NÃO era bug do compilador): ||/&& de
+  # 3+ termos, mistura, associações explícitas, atribuição e while.
+  'logic_chain3',
 ]
 
 foreach name : golden_examples
@@ -114,6 +117,31 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
     test('sim-' + c[0],
       find_program('sim_validate.sh'),
       args : [c167cc_exe.full_path(), meson.source_root() / c[1], c[0]] + c[2] + ['--'] + c[3],
+      workdir : meson.source_root())
+  endforeach
+
+  # BUG-2 da Sirius32 (investigado 24/09/2026, ver docs/limitations.md):
+  # suspeita de que `A || B || C` não testava C quando A e B eram falsos.
+  # Não se confirmou; estes 8 casos (todas as combinações V/F de A/B/C,
+  # o sufixo do nome do teste são os bits A/B/C) provam em execução
+  # ||/&& de 3 termos, `A || B && C`, `(A || B) || C` e `A || (B || C)`.
+  # Mesma função pra todos os casos, então fica fora de sim_cases (lá o
+  # nome do teste é também o label da função).
+  logic_chain3_cases = [
+    ['000', ['A=0', 'B=0', 'C=0'], ['OUT_OR=0', 'OUT_AND=0', 'OUT_MIX=0', 'OUT_ORL=0', 'OUT_ORR=0']],
+    ['001', ['A=0', 'B=0', 'C=48'], ['OUT_OR=1', 'OUT_AND=0', 'OUT_MIX=0', 'OUT_ORL=1', 'OUT_ORR=1']],
+    ['010', ['A=0', 'B=32', 'C=0'], ['OUT_OR=1', 'OUT_AND=0', 'OUT_MIX=0', 'OUT_ORL=1', 'OUT_ORR=1']],
+    ['011', ['A=0', 'B=32', 'C=48'], ['OUT_OR=1', 'OUT_AND=0', 'OUT_MIX=1', 'OUT_ORL=1', 'OUT_ORR=1']],
+    ['100', ['A=16', 'B=0', 'C=0'], ['OUT_OR=1', 'OUT_AND=0', 'OUT_MIX=1', 'OUT_ORL=1', 'OUT_ORR=1']],
+    ['101', ['A=16', 'B=0', 'C=48'], ['OUT_OR=1', 'OUT_AND=0', 'OUT_MIX=1', 'OUT_ORL=1', 'OUT_ORR=1']],
+    ['110', ['A=16', 'B=32', 'C=0'], ['OUT_OR=1', 'OUT_AND=0', 'OUT_MIX=1', 'OUT_ORL=1', 'OUT_ORR=1']],
+    ['111', ['A=16', 'B=32', 'C=48'], ['OUT_OR=1', 'OUT_AND=1', 'OUT_MIX=1', 'OUT_ORL=1', 'OUT_ORR=1']],
+  ]
+  foreach c : logic_chain3_cases
+    test('sim-logic_chain3_global_' + c[0],
+      find_program('sim_validate.sh'),
+      args : [c167cc_exe.full_path(), meson.source_root() / 'examples' / 'logic_chain3_global.c',
+              'logic_chain3_global'] + c[1] + ['--'] + c[2],
       workdir : meson.source_root())
   endforeach
 

@@ -6,6 +6,41 @@ assembly > optimization**.
 
 ## Fixed bugs (kept here for history)
 
+- **`||`/`&&` encadeado com 3+ termos (BUG-2 da Sirius32) - investigado
+  24/09/2026, NÃO é bug do compilador; nada mudou em `src/`.** Suspeita
+  (21/09/2026, `docs/BUGS_C167CC.md` da Sirius32, file `0x2F1C2`,
+  `core/motor_geral/detonacao_adaptativa_lote34.c`): em
+  `if (a >= X || b >= Y || c >= Z)`, com `a`/`b` falsos, o código pularia
+  direto pro resultado falso sem testar `c`. **Leitura errada do
+  assembly**: o `a || b` interno materializa 0/1 (`.L*_logic_false_*`:
+  `MOV R0, #0`) e o `||` externo testa esse valor logo em seguida
+  (`CMP R0, #0` / `JMPR cc_NZ`) e CAI no `.L*_or_rhs_*` que lê `c` - o
+  fluxo é correto (`EXPR_BINARY`/`OP_LAND`/`OP_LOR` em
+  `src/ir/ir_build.c`, curto-circuito com cada operando lido no máximo
+  uma vez, na ordem). **Causa provável da divergência observada lá
+  (768/3072 casos)**: o harness de validação monta o código compilado em
+  `org=0` (`port_real_abi.py` + `c166asm.assemble(org=0)`), e a rotina
+  lê `@ram(0x032D)` - endereço que cai DENTRO do próprio código montado
+  (0x3E..0x510 nessa rotina isolada). Semear/ler 0x032D lê/corrompe bytes
+  de instrução, e como a versão com `||` tem outro tamanho, o byte ali é
+  outro. Reproduzido: com `org=0` as versões `||` e `if`-separados
+  divergem (e o simulador chega a parar em opcode inválido); com o código
+  realocado pra `org=0x4000`, 3000 estados aleatórios de RAM dão 0
+  divergências. **Verificação feita**: fuzz em simulador com 76
+  expressões `||`/`&&`/`!` de 2 a 5 termos (cadeias planas + aleatórias,
+  com e sem parênteses, `uint8_t` e `uint16_t`), cada uma em `if`,
+  `if/else` e atribuição (228 casos), todas as combinações V/F: 0 falhas; `while` com `||` de 3 termos OK.
+  **Guardas de regressão adicionadas**: golden `golden-logic_chain3`
+  (`examples/logic_chain3.c`: `||`/`&&` de 3 termos, `a || b && c`,
+  `(a || b) || c`, `a || (b || c)`, 4 termos em atribuição, `while`) e
+  `sim-logic_chain3_global_{000..111}` (`examples/logic_chain3_global.c`,
+  as 8 combinações V/F de 3 termos executadas no simulador).
+  **Validação**: `meson test`: 31/31 -> 40/40; binário `c167cc`
+  idêntico ao anterior; Sirius32: `--dump-asm` dos 326 `.c` de `core/`
+  (exceto GCC-only) idêntico, `make core-all-check` 327/327 OK,
+  `validar_aleatorio_dpp.py` todas OK, `regressao_core.py` 88 OK + 5
+  ERRO_COMPILACAO (mesmos preexistentes).
+
 - **Indexar um identificador declarado ESCALAR inteiro (BUG-1 da
   Sirius32)**, ex. `@ram(0x1356) volatile uint8_t calib_1356;` seguido de
   `calib_1356[i]` (achado 21/09/2026 na Sirius32 - `docs/BUGS_C167CC.md`
