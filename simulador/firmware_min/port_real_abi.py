@@ -18,8 +18,11 @@ necessária é sintática/textual, não semântica):
     `note_var` conseguiria enxergar sozinho pra saber que precisa de mais que
     2 bytes. Sem essa conversão, um array de 8 words ficava alocado com só 2
     bytes e o acesso a índices >0 vazava pra memória não reservada.
-  - renomeia DIVU -> DIV (só o mnemônico com sinal existe neste montador -
-    ver docs/limitations.md, ainda uma limitação real). MULU NÃO é mais
+  - DIVU NÃO é mais renomeado pra DIV (25/09/2026: desde o commit d11286b,
+    BUG-4 da Sirius32, c166asm.py monta DIVU de verdade, opcode 0x5B, e o
+    c166sim.py divide com sinal só em DIV - renomear passava a trocar a
+    divisão sem sinal por com sinal sempre que um operando tinha o bit 15
+    setado). MULU também NÃO é mais
     renomeado (achado 02/09/2026: c166asm.py agora monta MULU de verdade,
     opcode 0x1B - renomear pra MUL mudava o resultado sempre que um operando
     tinha o bit 15 setado, invisível enquanto só a metade baixa do produto
@@ -54,7 +57,6 @@ def port(asm_text: str) -> str:
         if m:
             out.append(f'RESERVE {m.group(1)}, #{m.group(2)}')
             continue
-        line = re.sub(r'\bDIVU\b', 'DIV', line)
         m = re.match(r'^CALLR\s+(\S+)\s*$', stripped)
         if m:
             out.append(f'    CALLA UC, {m.group(1)}')
