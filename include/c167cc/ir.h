@@ -138,6 +138,38 @@ typedef enum {
                          `c167cc_far_read8(page, off)`). Needed for file
                          0x194F8 in the sibling Sirius32 project, which reads
                          far BYTES (MOVB ...,[RbindRw]) rather than words. */
+    /* ---- Valores de 32 bits como PAR de palavras (BUG-6/7/8/10/11/15 da
+       Sirius32, 01/10/2026) ----
+       O IR continua tendo só vregs de 16 bits. Um valor uint32_t/int32_t é
+       representado em ir_build.c como um par (palavra baixa, palavra alta)
+       de vregs/constantes (`Val32`) e toda operação de 32 bits é rebaixada
+       ali para operações de palavra. As instruções abaixo são as únicas que
+       o rebaixamento precisa além das de 16 bits já existentes; nenhuma é
+       dobrada pelo otimizador (o resultado depende de flags/MDH deixados
+       pela instrução anterior). IR_LOAD_SYM/IR_STORE_SYM ganharam `imm` =
+       deslocamento em bytes dentro do símbolo (0 ou 2) para ler/gravar a
+       palavra alta. */
+    IR_CARRYOP,    /* dst = a op b, op = OP_ADD/OP_SUB. imm == 0: palavra
+                       baixa (ADD/SUB, gera o vai-um); imm == 1: palavra alta
+                       (ADDC/SUBC, consome o vai-um da IR_CARRYOP imm==0
+                       imediatamente anterior - entre as duas o codegen só
+                       emite MOV, que não altera o flag C). */
+    IR_MULW,       /* dst = palavra baixa (MDL) de a * b (MULU, ou MUL se
+                       is_signed); deixa a palavra alta em MDH para a IR_MDH
+                       seguinte. */
+    IR_MDH,        /* dst = MDH (palavra alta do produto da IR_MULW
+                       imediatamente anterior). */
+    IR_SEXT16,     /* dst = 0xFFFF se a < 0 (int16), senão 0: a palavra alta
+                       da extensão de sinal de `a` (MOV + ASHR #15). */
+    IR_CMP32,      /* dst = (args[0]:a op args[1]:b) ? 1 : 0, comparação de
+                       32 bits; a/b = palavras baixas, args[0]/args[1] =
+                       palavras altas. op só pode ser OP_EQ/OP_NE/OP_LT/
+                       OP_GE (OP_GT/OP_LE chegam com os operandos trocados). */
+    IR_DIV32,      /* dst = (u16)(b:a / args[0]) ou resto (op = OP_DIV/
+                       OP_MOD): dividendo de 32 bits (a = palavra baixa, b =
+                       palavra alta) em MDL:MDH, DIVLU/DIVL pelo divisor de
+                       16 bits args[0]. Forma geral de IR_DIV32_SYM/
+                       IR_DIV32_MUL (dividendo = qualquer par de vregs). */
     IR_LOAD_ADDR,  /* dst = addr(sym) */
     IR_LOAD_MEM,   /* dst = *[addr_reg] (size in bytes) */
     IR_STORE_MEM,  /* *[addr_reg] = src (size in bytes) */
@@ -176,6 +208,11 @@ typedef struct IrInst {
     char *call_name;
     int *args;   /* virtual register ids */
     int nargs;
+
+    int wide32; /* emitida pelo rebaixamento de 32 bits (ver Val32 em
+                   ir_build.c) - o otimizador só itera a eliminação de
+                   código morto sobre estas, para o assembly de código sem
+                   32 bits continuar idêntico. */
 
     struct IrInst *next;
 } IrInst;

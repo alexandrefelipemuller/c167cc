@@ -168,29 +168,45 @@ static void optimize_func(IrFunc *fn) {
         }
     }
 
-    /* dead code elimination: mark used vregs, drop pure defs that are unused */
+    /* dead code elimination: mark used vregs, drop pure defs that are unused.
+       A 1ª passada é a de sempre (uma só, pra todo o código). As passadas
+       seguintes (BUG-11 da Sirius32, 01/10/2026) só removem instruções
+       emitidas pelo rebaixamento de 32 bits (`wide32`): quando só a palavra
+       baixa de uma expressão de 32 bits é usada, a cadeia inteira da
+       palavra alta (ADDC, leitura de MDH, carga da palavra alta...) morre
+       em cascata. Restrito a `wide32` pra não mudar o assembly de código
+       que não usa 32 bits. */
     char *used = calloc(n, 1);
-    for (IrInst *i = fn->head; i; i = i->next) {
-        if (i->a >= 0) used[i->a] = 1;
-        if (i->b >= 0) used[i->b] = 1;
-        for (int k = 0; k < i->nargs; k++) used[i->args[k]] = 1;
-    }
-
-    IrInst dummy = {0}; dummy.next = fn->head;
-    IrInst *prev = &dummy;
-    for (IrInst *i = fn->head; i; ) {
-        int removable = (i->kind == IR_CONST || i->kind == IR_MOV || i->kind == IR_UNOP ||
-                          i->kind == IR_BINOP || i->kind == IR_LOAD_SYM || i->kind == IR_LOAD_ADDR ||
-                          i->kind == IR_LOAD_MEM);
-        if (removable && i->dst >= 0 && !used[i->dst]) {
-            prev->next = i->next;
-            i = i->next;
-            continue;
+    for (int pass = 0; ; pass++) {
+        memset(used, 0, n);
+        for (IrInst *i = fn->head; i; i = i->next) {
+            if (i->a >= 0) used[i->a] = 1;
+            if (i->b >= 0) used[i->b] = 1;
+            for (int k = 0; k < i->nargs; k++) used[i->args[k]] = 1;
         }
-        prev = i; i = i->next;
+
+        int removed = 0;
+        IrInst dummy = {0}; dummy.next = fn->head;
+        IrInst *prev = &dummy;
+        for (IrInst *i = fn->head; i; ) {
+            int removable = (i->kind == IR_CONST || i->kind == IR_MOV || i->kind == IR_UNOP ||
+                              i->kind == IR_BINOP || i->kind == IR_LOAD_SYM || i->kind == IR_LOAD_ADDR ||
+                              i->kind == IR_LOAD_MEM ||
+                              i->kind == IR_MDH || i->kind == IR_SEXT16 ||
+                              (i->kind == IR_CARRYOP && i->imm == 1));
+            if (pass > 0 && !i->wide32) removable = 0;
+            if (removable && i->dst >= 0 && !used[i->dst]) {
+                prev->next = i->next;
+                i = i->next;
+                removed = 1;
+                continue;
+            }
+            prev = i; i = i->next;
+        }
+        fn->head = dummy.next;
+        fn->tail = prev == &dummy ? NULL : prev;
+        if (!removed) break;
     }
-    fn->head = dummy.next;
-    fn->tail = prev == &dummy ? NULL : prev;
 
     free(cval); free(is_const); free(multi_def); free(alias); free(seen_def); free(used);
 }
