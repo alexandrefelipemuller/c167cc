@@ -34,6 +34,7 @@ ID      [A-Za-z_][A-Za-z0-9_]*
 "if"                            { return KW_IF; }
 "else"                          { return KW_ELSE; }
 "while"                         { return KW_WHILE; }
+"do"                            { return KW_DO; }
 "for"                           { return KW_FOR; }
 "return"                        { return KW_RETURN; }
 "break"                         { return KW_BREAK; }

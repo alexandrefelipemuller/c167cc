@@ -37,9 +37,13 @@ typedef struct Type {
 } Type;
 
 /* A struct's fields, laid out once at definition time (see struct_def_new).
-   Every field is 2-byte aligned, matching this compiler's frame/global
-   layout elsewhere (see align2() in the C167 backend) - there is no
-   4-byte alignment for int32_t/uint32_t fields, and no packing control. */
+   Layout real do C166 (BUG-13 da Sirius32, 01/10/2026): campo de 1 byte
+   (int8_t/uint8_t, array deles, struct só de bytes) tem alinhamento 1 -
+   bytes consecutivos empacotam; qualquer outro campo (16/32 bits,
+   ponteiro) alinha em endereço PAR (ver type_align). Não há alinhamento
+   de 4 bytes pra int32_t/uint32_t, nem controle de packing. O tamanho
+   total é arredondado pro alinhamento da própria struct (par quando há
+   algum membro word; uma struct só de bytes pode ter tamanho ímpar). */
 typedef struct StructField {
     char *name;
     Type *type;
@@ -51,6 +55,7 @@ typedef struct StructDef {
     StructField *fields;
     int nfields;
     int size;
+    int align;    /* 1 se todos os campos são de alinhamento 1, senão 2 */
     int is_union; /* if set, every field is at offset 0 (see struct_def_new) */
 } StructDef;
 
@@ -58,6 +63,7 @@ Type *type_new(TypeKind kind);
 Type *type_new_ptr(Type *pointee);
 Type *type_new_array(Type *elem, size_t len);
 int type_size(const Type *t);
+int type_align(const Type *t); /* 1 (só bytes) ou 2 */
 int type_is_signed(const Type *t);
 const char *type_name(const Type *t);
 
@@ -151,6 +157,7 @@ typedef enum {
     STMT_RETURN,
     STMT_IF,
     STMT_WHILE,
+    STMT_DO_WHILE,     /* do body while (cond); - usa `cond`/`body` como STMT_WHILE */
     STMT_FOR,
     STMT_BREAK,
     STMT_CONTINUE,

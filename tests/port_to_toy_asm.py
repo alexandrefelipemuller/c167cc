@@ -73,6 +73,21 @@ def port(asm_text: str, func_label: str) -> str:
     # or SFR-clobbering opcode. Use the same self-referential-loop halt
     # convention c166sim.py's `run()` actually detects (pc stuck for
     # _HALT_THRESHOLD steps).
+    # BUG-13 da Sirius32 (01/10/2026): um global de mais de 2 bytes (array,
+    # struct) referenciado pelo corpo precisa do seu tamanho REAL no
+    # montador de brinquedo - sem isto ele vira uma variável de 1 word e o
+    # acesso por ponteiro ([Rn] com offset de campo/índice) cai em cima da
+    # variável vizinha. O tamanho vem do próprio `NOME: DS N` que o c167cc
+    # emite na .bss; `RESERVE NOME, #N` é a diretiva de c166asm.py pra isso
+    # (não gera código). Globais de até 2 bytes ficam como sempre.
+    body_text = "\n".join(out)
+    reserves = []
+    for line in lines[:start]:
+        m = re.match(r"^(\w+):\s+DS\s+(\d+)\b", line)
+        if m and int(m.group(2)) > 2 and re.search(r"\b%s\b" % re.escape(m.group(1)), body_text):
+            reserves.append(f"RESERVE {m.group(1)}, #{m.group(2)}")
+    out = reserves + out
+
     out.append("PORT_HALT:")
     out.append("JMPR cc_UC, PORT_HALT")
     return "\n".join(out) + "\n"

@@ -1021,6 +1021,24 @@ static void gen_stmt(Builder *b, Stmt *s) {
             emit(b, IR_LABEL)->label = strdup(l_end);
             break;
         }
+        case STMT_DO_WHILE: {
+            /* BUG-14 da Sirius32: corpo primeiro, condição no fim.
+               `continue` salta pro teste (l_cond), `break` pro fim. */
+            char *l_body = fmt_label(b, "do_body");
+            char *l_cond = fmt_label(b, "do_cond");
+            char *l_end = fmt_label(b, "do_end");
+            emit(b, IR_LABEL)->label = strdup(l_body);
+            char *ob = b->break_label, *oc = b->continue_label;
+            b->break_label = l_end; b->continue_label = l_cond;
+            gen_stmt(b, s->body);
+            b->break_label = ob; b->continue_label = oc;
+            emit(b, IR_LABEL)->label = strdup(l_cond);
+            Type *ct; int cv = gen_expr(b, s->cond, &ct);
+            IrInst *cj = emit(b, IR_CJMP); cj->a = cv; cj->loc = s->loc;
+            cj->true_label = strdup(l_body); cj->false_label = strdup(l_end);
+            emit(b, IR_LABEL)->label = strdup(l_end);
+            break;
+        }
         case STMT_FOR: {
             Scope *outer = b->scope;
             b->scope = scope_new(outer);
