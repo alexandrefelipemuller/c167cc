@@ -965,6 +965,52 @@ class Sim:
         self.flags['V'] = (sa == sb) and (sr != sa)
         self.flags['C'] = res > 0xFFFF
 
+    # ADDC/ADDCB/SUBC/SUBCB (BUG-12 da Sirius32, 01/10/2026). Manual c166ism.pdf:
+    #   Z: "Set if result equals zero AND THE PREVIOUS Z FLAG WAS SET. Cleared
+    #      otherwise." (flag 'S' = sticky) - é o que faz `SUB lo ; SUBC hi` +
+    #      cc_Z/cc_NZ/cc_ULE/cc_UGT valer como comparação de 32 bits. Só essas 4
+    #      instruções têm essa regra (ADD/SUB/CMP/NEG usam o Z simples).
+    #   C: vai-um (ADDC) / empréstimo (SUBC) da operação COMPLETA, com o carry
+    #      de entrada.
+    #   V: overflow com sinal da operação COMPLETA. Antes o carry de entrada
+    #      era somado ao op2 (`b + cin`) e o sinal tirado dessa soma: com
+    #      op2 = 0x7FFF/0x7F e C=1 o "op2" virava 0x8000/0x80 (sinal trocado) e
+    #      V saía invertido. Aqui V é calculado em aritmética com sinal.
+    #   N: bit mais significativo do resultado.
+    #   E (op2 == 0x8000/0x80): não rastreado no simulador (ver cc_true).
+    def _signed(self, v, width):
+        signbit = 1 << (width - 1)
+        v &= (1 << width) - 1
+        return v - (signbit << 1) if v & signbit else v
+
+    def update_flags_addc(self, a, b, cin, width=16):
+        """Flags de ADDC/ADDCB. Devolve o resultado já mascarado."""
+        mask, signbit = (1 << width) - 1, 1 << (width - 1)
+        a &= mask
+        b &= mask
+        total = a + b + cin
+        res = total & mask
+        s = self._signed(a, width) + self._signed(b, width) + cin
+        self.flags['Z'] = (res == 0) and bool(self.flags['Z'])
+        self.flags['N'] = (res & signbit) != 0
+        self.flags['V'] = not (-signbit <= s < signbit)
+        self.flags['C'] = total > mask
+        return res
+
+    def update_flags_subc(self, a, b, cin, width=16):
+        """Flags de SUBC/SUBCB. Devolve o resultado já mascarado."""
+        mask, signbit = (1 << width) - 1, 1 << (width - 1)
+        a &= mask
+        b &= mask
+        total = a - b - cin
+        res = total & mask
+        s = self._signed(a, width) - self._signed(b, width) - cin
+        self.flags['Z'] = (res == 0) and bool(self.flags['Z'])
+        self.flags['N'] = (res & signbit) != 0
+        self.flags['V'] = not (-signbit <= s < signbit)
+        self.flags['C'] = total < 0
+        return res
+
     def cc_true(self, cc):
         """Tabela completa das 16 condições (manual Infineon, Table 5 "Condition
         Code Encoding") - antes só cobria 9 das 16, achado ao travar no boot
@@ -1193,8 +1239,7 @@ class Sim:
             d, s = (b >> 4) & 0xF, b & 0xF
             a, bb = self.r[d], self.r[s]
             cin = 1 if self.flags['C'] else 0
-            res = a + bb + cin
-            self.update_flags_add(a, bb + cin, res)
+            res = self.update_flags_addc(a, bb, cin)
             self.r[d] = res & 0xFFFF
             self.pc += 2
             return True
@@ -1204,8 +1249,7 @@ class Sim:
             d, s = (b >> 4) & 0xF, b & 0xF
             a, bb = self.r[d], self.r[s]
             cin = 1 if self.flags['C'] else 0
-            res = a - bb - cin
-            self.update_flags_sub(a, bb + cin, res)
+            res = self.update_flags_subc(a, bb, cin)
             self.r[d] = res & 0xFFFF
             self.pc += 2
             return True
@@ -1216,10 +1260,36 @@ class Sim:
             dnib, snib = (b >> 4) & 0xF, b & 0xF
             a, bb = self.get_breg(dnib), self.get_breg(snib)
             cin = 1 if self.flags['C'] else 0
-            res = a - bb - cin
-            self.update_flags_sub(a, bb + cin, res, width=8)
+            res = self.update_flags_subc(a, bb, cin, width=8)
             self.set_breg(dnib, res & 0xFF)
             self.pc += 2
+            return True
+
+        if op == 0x11:  # ADDCB Rbn,Rbm (soma byte com carry de entrada)
+            b = self.mem[pc + 1]
+            dnib, snib = (b >> 4) & 0xF, b & 0xF
+            cin = 1 if self.flags['C'] else 0
+            res = self.update_flags_addc(self.get_breg(dnib), self.get_breg(snib), cin, width=8)
+            self.set_breg(dnib, res & 0xFF)
+            self.pc += 2
+            return True
+
+        if op in (0x13, 0x15, 0x33, 0x35):  # ADDCB/SUBCB reg,mem / mem,reg
+            regb = self.mem[pc + 1]
+            mem = self.w16(pc + 2)
+            is_memreg = op in (0x15, 0x35)
+            a = self.mem_read8(mem) if is_memreg else self.read_breg_field(regb)
+            b = self.read_breg_field(regb) if is_memreg else self.mem_read8(mem)
+            cin = 1 if self.flags['C'] else 0
+            if op in (0x13, 0x15):
+                res = self.update_flags_addc(a, b, cin, width=8)
+            else:
+                res = self.update_flags_subc(a, b, cin, width=8)
+            if is_memreg:
+                self.mem_write8(mem, res)
+            else:
+                self.write_breg_field(regb, res)
+            self.pc += 4
             return True
 
         if op == 0x20:  # SUB Rw,Rw
@@ -1247,8 +1317,7 @@ class Sim:
             imm = self.w16(pc + 2)
             a = self.read_regfield16(regb)
             cin = 1 if self.flags['C'] else 0
-            res = a + imm + cin
-            self.update_flags_add(a, imm + cin, res)
+            res = self.update_flags_addc(a, imm, cin)
             self.write_regfield16(regb, res)
             self.pc += 4
             return True
@@ -1258,8 +1327,7 @@ class Sim:
             imm = self.w16(pc + 2)
             a = self.read_regfield16(regb)
             cin = 1 if self.flags['C'] else 0
-            res = a - imm - cin
-            self.update_flags_sub(a, imm + cin, res)
+            res = self.update_flags_subc(a, imm, cin)
             self.write_regfield16(regb, res)
             self.pc += 4
             return True
@@ -1548,11 +1616,9 @@ class Sim:
             b = self.read_regfield16(regb) if is_memreg else self.mem_read16(mem)
             cin = 1 if self.flags['C'] else 0
             if is_addc:
-                res = a + b + cin
-                self.update_flags_add(a, b + cin, res)
+                res = self.update_flags_addc(a, b, cin)
             else:
-                res = a - b - cin
-                self.update_flags_sub(a, b + cin, res)
+                res = self.update_flags_subc(a, b, cin)
             if is_memreg:
                 self.mem_write16(mem, res)
             else:
@@ -1593,13 +1659,11 @@ class Sim:
                 self.update_flags_sub(a, imm, a - imm, width=8)
             elif name == 'ADDC':
                 cin = 1 if self.flags['C'] else 0
-                res = a + imm + cin
-                self.update_flags_add(a, imm + cin, res, width=8)
+                res = self.update_flags_addc(a, imm, cin, width=8)
                 self.write_breg_field(regb, res & 0xFF)
             elif name == 'SUBC':
                 cin = 1 if self.flags['C'] else 0
-                res = a - imm - cin
-                self.update_flags_sub(a, imm + cin, res, width=8)
+                res = self.update_flags_subc(a, imm, cin, width=8)
                 self.write_breg_field(regb, res & 0xFF)
             elif name in ('AND', 'OR', 'XOR'):
                 res = {'AND': a & imm, 'OR': a | imm, 'XOR': a ^ imm}[name]
@@ -2030,13 +2094,11 @@ class Sim:
                 self.update_flags_sub(a, src, a - src)
             elif name == 'ADDC':
                 cin = 1 if self.flags['C'] else 0
-                res = a + src + cin
-                self.update_flags_add(a, src + cin, res)
+                res = self.update_flags_addc(a, src, cin)
                 self.r[nreg] = res & 0xFFFF
             elif name == 'SUBC':
                 cin = 1 if self.flags['C'] else 0
-                res = a - src - cin
-                self.update_flags_sub(a, src + cin, res)
+                res = self.update_flags_subc(a, src, cin)
                 self.r[nreg] = res & 0xFFFF
             else:
                 self.r[nreg] = self._alu_op(name, a, src)
@@ -2060,13 +2122,11 @@ class Sim:
                 self.update_flags_sub(a, src, a - src, width=8)
             elif name == 'ADDC':
                 cin = 1 if self.flags['C'] else 0
-                res = a + src + cin
-                self.update_flags_add(a, src + cin, res, width=8)
+                res = self.update_flags_addc(a, src, cin, width=8)
                 self.set_breg(dnib, res & 0xFF)
             elif name == 'SUBC':
                 cin = 1 if self.flags['C'] else 0
-                res = a - src - cin
-                self.update_flags_sub(a, src + cin, res, width=8)
+                res = self.update_flags_subc(a, src, cin, width=8)
                 self.set_breg(dnib, res & 0xFF)
             elif name in ('AND', 'OR', 'XOR'):
                 res = {'AND': a & src, 'OR': a | src, 'XOR': a ^ src}[name]

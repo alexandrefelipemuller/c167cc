@@ -171,6 +171,17 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
     args : [meson.source_root() / 'tests' / 'sim_md_addr_test.py', sim_dir],
     workdir : meson.source_root())
 
+  # BUG-12 da Sirius32 (01/10/2026): Z de ADDC/ADDCB/SUBC/SUBCB é encadeado
+  # com o Z anterior (manual: "Set if result equals zero and the previous Z
+  # flag was set"), e C/V levam o carry de entrada em conta. Cobre todos os
+  # modos de endereçamento (word e byte), comparação de 32 bits `SUB lo ;
+  # SUBC hi ; JMPR cc` e os bytes reais do firmware (file 0x1534).
+  test('sim-addc_subc_z',
+    find_program('python3'),
+    args : [meson.source_root() / 'tests' / 'sim_addc_subc_z_test.py', sim_dir],
+    timeout : 120,
+    workdir : meson.source_root())
+
   # BUG-2 da Sirius32 (investigado 24/09/2026, ver docs/limitations.md):
   # suspeita de que `A || B || C` não testava C quando A e B eram falsos.
   # Não se confirmou; estes 8 casos (todas as combinações V/F de A/B/C,
