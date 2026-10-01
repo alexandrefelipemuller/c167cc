@@ -690,7 +690,8 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
                 case OP_OR: mn = "OR"; break;
                 case OP_XOR: mn = "XOR"; break;
                 case OP_SHL: mn = "SHL"; break;
-                case OP_SHR: mn = "SHR"; break;
+                /* BUG-16 da Sirius32: i->imm != 0 = operando esquerdo com sinal (ver ir_build.c). */
+                case OP_SHR: mn = i->imm ? "ASHR" : "SHR"; break;
                 default: mn = "ADD"; break;
             }
             const char *a = load_operand(cg, i->a, C167_SPILL_SCRATCH_1);

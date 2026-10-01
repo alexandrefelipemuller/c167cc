@@ -738,9 +738,23 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
             i->dst = new_vreg(b); i->op = e->op; i->a = lv; i->b = rv;
             i->size = sz; i->is_signed = type_is_signed(lt) || type_is_signed(rt);
             i->loc = e->loc;
+            /* BUG-16 da Sirius32 (01/10/2026): `>>` em valor COM sinal é
+               aritmético (ASHR), e quem decide é só o operando da ESQUERDA -
+               `i->is_signed` acima mistura os dois lados (serve pra
+               comparação/MUL/DIV), e a contagem do shift não entra na
+               conta. `imm` não é usado por IR_BINOP: carrega esse bit até o
+               otimizador/codegen (mesma convenção do IR_UNOP/OP_ASSIGN). */
+            if (e->op == OP_SHR && type_is_signed(lt) && type_bytes(lt) <= 2) i->imm = 1;
             switch (e->op) {
                 case OP_EQ: case OP_NE: case OP_LT: case OP_GT: case OP_LE: case OP_GE:
                     *out_type = u16_type(); break;
+                case OP_SHR:
+                    /* BUG-16 da Sirius32: o tipo de `int8_t >> n` é o do
+                       operando esquerdo promovido (com sinal), não o da
+                       contagem - senão `(s8 >> 1) >> 1` ou `(s8 >> 1) < 0`
+                       perdiam o sinal no passo seguinte. */
+                    if (type_is_signed(lt) && type_bytes(lt) == 1) { *out_type = type_new(TY_I16); break; }
+                    /* fallthrough */
                 default:
                     *out_type = type_bytes(lt) >= type_bytes(rt) ? lt : rt;
             }

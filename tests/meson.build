@@ -20,6 +20,9 @@ golden_examples = [
   # BUG-2 (24/09/2026, investigado - NÃO era bug do compilador): ||/&& de
   # 3+ termos, mistura, associações explícitas, atribuição e while.
   'logic_chain3',
+  # BUG-9/BUG-16 da Sirius32 (01/10/2026): `(int8_t)` de `uint8_t` estende o
+  # sinal; `>>` com sinal é ASHR e sem sinal continua SHR.
+  'sign_cast_shift',
 ]
 
 foreach name : golden_examples
@@ -127,6 +130,44 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
      ['UA=50000', 'UB=7', 'SA=-1000', 'SB=7', 'LHI=15', 'LLO=16960', 'LB=300'],
      ['OUT_UQ=7142', 'OUT_UR=6', 'OUT_SQ=-142', 'OUT_SR=-6', 'OUT_LQ=3333', 'OUT_LR=100']],
   ]
+  # BUG-9 da Sirius32 (01/10/2026): `(int8_t)` de `uint8_t` (e vizinhos:
+  # `(int16_t)(int8_t)u8`, `(int8_t)` de uint16_t, `(uint8_t)` de int16_t/
+  # int8_t negativos, local int8_t lida depois). Mesma função com entradas
+  # negativas e positivas, por isso fora de sim_cases (lá o nome do teste é
+  # também o label da função). D=200 é -56 como int8_t; W=0x1280 -> -128;
+  # S8=-116 -> 140. Com o bug: OUT_GT=1, OUT_LT=0, OUT_U8S8=-116.
+  sign_cast_cases = [
+    ['neg', ['D=200', 'W=4736', 'S16=-2', 'S8=-116'],
+     ['OUT_GT=0', 'OUT_LT=1', 'OUT_WIDE=-56', 'OUT_FROM_W=-128', 'OUT_U8=254', 'OUT_U8S8=140', 'OUT_LOC=-56', 'OUT_LOC_NEG=1']],
+    ['pos', ['D=100', 'W=4657', 'S16=300', 'S8=5'],
+     ['OUT_GT=1', 'OUT_LT=0', 'OUT_WIDE=100', 'OUT_FROM_W=49', 'OUT_U8=44', 'OUT_U8S8=5', 'OUT_LOC=100', 'OUT_LOC_NEG=0']],
+  ]
+  foreach c : sign_cast_cases
+    test('sim-sign_cast_global_' + c[0],
+      find_program('sim_validate.sh'),
+      args : [c167cc_exe.full_path(), meson.source_root() / 'examples' / 'sign_cast_global.c',
+              'sign_cast_global'] + c[1] + ['--'] + c[2],
+      workdir : meson.source_root())
+  endforeach
+
+  # BUG-16 da Sirius32 (01/10/2026): `>>` com sinal é ASHR (int16_t global e
+  # local, int8_t, contagem constante e variável, constante dobrada) e sem
+  # sinal continua SHR (U=64536 >> 6 = 1008, não -16). Com o bug, S=-1000
+  # dava OUT_C=1008, OUT_V=16134, OUT_B=32718, OUT_FOLD=2048.
+  ashr_cases = [
+    ['neg', ['S=-1000', 'B=-100', 'U=64536', 'UB=200', 'N=2'],
+     ['OUT_C=-16', 'OUT_V=-250', 'OUT_LOC=-125', 'OUT_ASSIGN=-250', 'OUT_B=-50', 'OUT_B2=-13', 'OUT_FOLD=-2048', 'OUT_U=1008', 'OUT_UV=16134', 'OUT_UB=100']],
+    ['pos', ['S=1000', 'B=100', 'U=1000', 'UB=100', 'N=3'],
+     ['OUT_C=15', 'OUT_V=125', 'OUT_LOC=125', 'OUT_ASSIGN=125', 'OUT_B=50', 'OUT_B2=6', 'OUT_FOLD=-2048', 'OUT_U=15', 'OUT_UV=125', 'OUT_UB=50']],
+  ]
+  foreach c : ashr_cases
+    test('sim-ashr_global_' + c[0],
+      find_program('sim_validate.sh'),
+      args : [c167cc_exe.full_path(), meson.source_root() / 'examples' / 'ashr_global.c',
+              'ashr_global'] + c[1] + ['--'] + c[2],
+      workdir : meson.source_root())
+  endforeach
+
   foreach c : sim_cases
     test('sim-' + c[0],
       find_program('sim_validate.sh'),
