@@ -237,7 +237,7 @@ static void dl_push(DeclList *l, Decl *d) {
 %token <str> IDENT
 %token KW_VOID KW_CHAR KW_SIGNED KW_UNSIGNED
 %token KW_I8 KW_U8 KW_I16 KW_U16 KW_I32 KW_U32
-%token KW_IF KW_ELSE KW_WHILE KW_FOR KW_RETURN KW_BREAK KW_CONTINUE
+%token KW_IF KW_ELSE KW_WHILE KW_DO KW_FOR KW_RETURN KW_BREAK KW_CONTINUE
 %token KW_SWITCH KW_CASE KW_DEFAULT KW_VOLATILE KW_CONST KW_ENUM KW_STRUCT KW_UNION
 %token AT_RAM AT_ROM AT_INTERRUPT
 %token TOK_EQ TOK_NE TOK_LE TOK_GE TOK_ANDAND TOK_OROR TOK_SHL TOK_SHR TOK_ARROW
@@ -251,7 +251,7 @@ static void dl_push(DeclList *l, Decl *d) {
 %type <expr> opt_expr init_opt
 %type <exprlist> arg_list init_list_items
 %type <expr> init_list
-%type <stmt> stmt block_stmt decl_stmt if_stmt while_stmt for_stmt simple_stmt case_stmt
+%type <stmt> stmt block_stmt decl_stmt if_stmt while_stmt do_stmt for_stmt simple_stmt case_stmt
 %type <stmtlist> stmt_list case_list
 %type <decl> param decl_declarator
 %type <decllist> param_list param_list_opt decl_declarator_list
@@ -545,6 +545,7 @@ stmt:
     | decl_stmt { $$ = $1; }
     | if_stmt { $$ = $1; }
     | while_stmt { $$ = $1; }
+    | do_stmt { $$ = $1; }
     | for_stmt { $$ = $1; }
     | KW_SWITCH '(' expr ')' '{' case_list '}'
       {
@@ -648,6 +649,17 @@ while_stmt:
       {
         Stmt *s = stmt_new(STMT_WHILE, loc());
         s->cond = $3; s->body = $5;
+        $$ = s;
+      }
+    ;
+
+/* BUG-14 da Sirius32 (01/10/2026): `do corpo while (cond);` - o corpo roda
+   pelo menos uma vez; `continue` vai pro teste da condição. */
+do_stmt:
+      KW_DO stmt KW_WHILE '(' expr ')' ';'
+      {
+        Stmt *s = stmt_new(STMT_DO_WHILE, loc());
+        s->cond = $5; s->body = $2;
         $$ = s;
       }
     ;

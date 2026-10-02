@@ -20,6 +20,13 @@ golden_examples = [
   # BUG-2 (24/09/2026, investigado - NÃO era bug do compilador): ||/&& de
   # 3+ termos, mistura, associações explícitas, atribuição e while.
   'logic_chain3',
+  # BUG-13 da Sirius32 (01/10/2026): layout de struct/union com membro de 1
+  # byte (bytes empacotam, word alinha em par) - `.`/`->`, local, global,
+  # @ram, aninhada, array de struct, union, inicializador de global e cópia.
+  'struct_byte_layout',
+  # BUG-14 da Sirius32 (01/10/2026): `do { } while ();` com break/continue
+  # e aninhado com while/for.
+  'do_while',
 ]
 
 foreach name : golden_examples
@@ -127,6 +134,22 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
      ['UA=50000', 'UB=7', 'SA=-1000', 'SB=7', 'LHI=15', 'LLO=16960', 'LB=300'],
      ['OUT_UQ=7142', 'OUT_UR=6', 'OUT_SQ=-142', 'OUT_SR=-6', 'OUT_LQ=3333', 'OUT_LR=100']],
   ]
+  sim_cases += [
+    # BUG-13 da Sirius32 (01/10/2026, ver docs/limitations.md): membro
+    # uint8_t de struct era alinhado em palavra (`b` lido em +2, `c` em +4).
+    # A struct {u8 a; u8 b; u16 c; u8 d; u16 e;} é sobreposta por ponteiro a
+    # BUF = {0x2211, IN, 0x6655, 0x0888}: a=0x11, b=0x22, c=IN, d=0x55,
+    # e=0x0888 (+5 é padding); depois grava b=0x7F e d=0x01 e relê as words
+    # (0x7F11 = 32529, 0x6601 = 26113) - prova que a escrita é MOVB no byte
+    # certo e não mexe no vizinho.
+    ['struct_byte_layout_global', 'examples/struct_byte_layout_global.c', ['IN=17203'],
+     ['OUT_A=17', 'OUT_B=34', 'OUT_C=17203', 'OUT_D=85', 'OUT_E=2184', 'OUT_W0=32529', 'OUT_W2=26113']],
+    # BUG-14 da Sirius32 (01/10/2026, ver docs/limitations.md): do/while.
+    # N=5 tem 3 bits; soma dos ímpares 1..LIM=6 é 9 (continue vai pro teste);
+    # aninhado com while/for dá 18.
+    ['do_while_global', 'examples/do_while_global.c', ['N=5', 'LIM=6'],
+     ['OUT_BITS=3', 'OUT_ONCE=1', 'OUT_SUM=9', 'OUT_NEST=18']],
+  ]
   foreach c : sim_cases
     test('sim-' + c[0],
       find_program('sim_validate.sh'),
@@ -189,6 +212,23 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
   # ||/&& de 3 termos, `A || B && C`, `(A || B) || C` e `A || (B || C)`.
   # Mesma função pra todos os casos, então fica fora de sim_cases (lá o
   # nome do teste é também o label da função).
+  # BUG-14 da Sirius32: mesma função de sim-do_while_global, outras entradas
+  # (fora de sim_cases porque lá o nome do teste é também o label da função).
+  # N=0: o corpo roda uma vez mesmo com a condição já falsa (OUT_BITS=1);
+  # LIM=100: o `break` em k>9 encerra o laço (1+3+5+7+9 = 25). N=65535: 16
+  # voltas; LIM=1: condição falsa na 1ª volta (soma 1).
+  do_while_cases = [
+    ['zero_break', ['N=0', 'LIM=100'], ['OUT_BITS=1', 'OUT_ONCE=1', 'OUT_SUM=25', 'OUT_NEST=18']],
+    ['max_once', ['N=65535', 'LIM=1'], ['OUT_BITS=16', 'OUT_ONCE=1', 'OUT_SUM=1', 'OUT_NEST=18']],
+  ]
+  foreach c : do_while_cases
+    test('sim-do_while_global_' + c[0],
+      find_program('sim_validate.sh'),
+      args : [c167cc_exe.full_path(), meson.source_root() / 'examples' / 'do_while_global.c',
+              'do_while_global'] + c[1] + ['--'] + c[2],
+      workdir : meson.source_root())
+  endforeach
+
   logic_chain3_cases = [
     ['000', ['A=0', 'B=0', 'C=0'], ['OUT_OR=0', 'OUT_AND=0', 'OUT_MIX=0', 'OUT_ORL=0', 'OUT_ORR=0']],
     ['001', ['A=0', 'B=0', 'C=48'], ['OUT_OR=1', 'OUT_AND=0', 'OUT_MIX=0', 'OUT_ORL=1', 'OUT_ORR=1']],

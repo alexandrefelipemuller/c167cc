@@ -88,6 +88,60 @@ static void flatten_init_list(Expr *init, Type *type, int **out, int *n, int *ca
     }
 }
 
+/* BUG-13 da Sirius32 (01/10/2026): inicializador de global que envolve
+   struct/union é montado BYTE a byte numa imagem do tamanho real do tipo,
+   nos offsets reais dos campos (campo uint8_t ocupa 1 byte, não 1 word),
+   e só então empacotado em words little-endian pro `DW` - o caminho de
+   words acima (`flatten_init_list`) assumia "todo campo ocupa words
+   inteiras", que deixou de valer. Mesmas regras de sempre: o que falta no
+   inicializador fica zero; union inicializa só o 1º membro (como em C).
+   `buf` já vem zerado. */
+static void fill_init_bytes(Expr *init, Type *type, unsigned char *buf, int off) {
+    if (type->is_array) {
+        if (init->kind != EXPR_INIT_LIST) {
+            fprintf(stderr, "%s:%d: error: array initializer must be a brace-enclosed list\n",
+                    init->loc.file, init->loc.line);
+            exit(1);
+        }
+        int esz = type_size(type->pointee);
+        for (int i = 0; i < init->n_init_elems && i < (long)type->array_len; i++)
+            fill_init_bytes(init->init_elems[i], type->pointee, buf, off + i * esz);
+        return;
+    }
+    if (type->kind == TY_STRUCT) {
+        StructDef *sd = type->struct_def;
+        if (init->kind != EXPR_INIT_LIST) {
+            fprintf(stderr, "%s:%d: error: struct initializer must be a brace-enclosed list\n",
+                    init->loc.file, init->loc.line);
+            exit(1);
+        }
+        int nf = sd->is_union ? (sd->nfields > 0 ? 1 : 0) : sd->nfields;
+        for (int i = 0; i < nf && i < init->n_init_elems; i++)
+            fill_init_bytes(init->init_elems[i], sd->fields[i].type, buf, off + sd->fields[i].offset);
+        return;
+    }
+    long v = eval_const_scalar(init);
+    int sz = type_size(type);
+    for (int k = 0; k < sz; k++) buf[off + k] = (unsigned char)((v >> (8 * k)) & 0xFF);
+}
+
+static int type_has_struct(const Type *t) {
+    if (t->is_array) return type_has_struct(t->pointee);
+    return t->kind == TY_STRUCT;
+}
+
+static void flatten_global_init(Expr *init, Type *type, int **out, int *n, int *cap) {
+    if (!type_has_struct(type)) { flatten_init_list(init, type, out, n, cap); return; }
+    int size = type_size(type);
+    unsigned char *buf = xalloc((size_t)size + 2);
+    fill_init_bytes(init, type, buf, 0);
+    int words = (size + 1) / 2;
+    *out = xalloc(sizeof(int) * (words ? words : 1));
+    for (int w = 0; w < words; w++) (*out)[w] = buf[2 * w] | (buf[2 * w + 1] << 8);
+    *n = words; *cap = words;
+    free(buf);
+}
+
 static AsmLine *emit_raw(CG *cg, const char *label, const char *mnemonic, const char *operands, const char *comment) {
     AsmLine *l = xalloc(sizeof(AsmLine));
     if (label) l->label = strdup(label);
@@ -790,7 +844,7 @@ AsmProgram *c167_codegen(IrModule *mod) {
         ag->sym = g->sym;
         if (g->init) {
             int cap = 0;
-            flatten_init_list(g->init, g->sym->type, &ag->init_words, &ag->n_init_words, &cap);
+            flatten_global_init(g->init, g->sym->type, &ag->init_words, &ag->n_init_words, &cap);
         }
         ag->next = prog->globals;
         prog->globals = ag;

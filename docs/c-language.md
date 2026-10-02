@@ -46,11 +46,18 @@ type is expected - including a pointer to it, a field of another struct
 same as C), and a fixed-size array of it. Both `.` and `->` member
 access are supported (`p->b` is just parsed as `(*p).b`).
 
-Field layout has no padding/packing control: each field starts 2-byte
-aligned and the struct's total size is rounded up to an even number,
-matching this compiler's frame/global layout everywhere else (see
-`align2()` in the C167 backend) - there is no 4-byte alignment even for
-`int32_t`/`uint32_t` fields.
+Field layout follows the real C166 rule (BUG-13 da Sirius32, fixed
+01/10/2026 - before that every field was 2-byte aligned): a 1-byte field
+(`int8_t`/`uint8_t`, an array of them, or a nested struct made only of
+bytes) has alignment 1, so consecutive byte fields pack; any other field
+(16/32-bit integer, pointer) starts at an even offset. In
+`struct { uint8_t a; uint8_t b; uint16_t c; }`, `a` is at +0, `b` at +1
+and `c` at +2 (size 4). The total size is rounded up to even only when
+the struct has a word-aligned field - an all-byte struct can have an odd
+size (`struct { uint8_t r, g, b; }` is 3 bytes, and an array of it has
+stride 3). There is no packing control and no 4-byte alignment for
+`int32_t`/`uint32_t` fields. See `type_align()`/`struct_def_new()` in
+`src/ast/ast.c`.
 
 **Struct return by value and struct assignment ARE supported** (achado
 21/08/2026, compilando `reimplementacao_c` pela 1ª vez - o código real
@@ -114,7 +121,8 @@ union Value {
 top-level-only rule, same "no by-value copy/param/return" restrictions,
 same `.`/`->` member access) - every field simply starts at offset 0
 instead of being laid out sequentially, and the union's size is its
-largest field, rounded up to even per the same 2-byte-alignment rule.
+largest field, rounded up to even only if some field is word-aligned
+(same alignment rule as structs above).
 
 `struct` and `union` tags share one namespace (as in real C: you can't
 declare both `struct Foo` and `union Foo`), so using the wrong keyword
@@ -204,7 +212,9 @@ atomic, so nothing needs to track "the pointer" across the two.
 
 ## Statements
 
-`if`/`else`, `while`, `for` (including a `for (T i = ...; ...; ...)`
+`if`/`else`, `while`, `do ... while (cond);` (BUG-14 da Sirius32,
+01/10/2026 - `continue` inside it jumps to the condition test), `for`
+(including a `for (T i = ...; ...; ...)`
 init-declaration), `break`, `continue`, `return`, blocks, `switch`/`case`/
 `default`.
 

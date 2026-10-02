@@ -44,6 +44,18 @@ int type_size(const Type *t) {
     return 0;
 }
 
+/* Alinhamento exigido pelo tipo no C166: 1 pra byte (e agregados só de
+   bytes), 2 pra todo o resto - acesso word em endereço ímpar é trap de
+   hardware (ILLOPA) no C167. Ver BUG-13 da Sirius32. */
+int type_align(const Type *t) {
+    switch (t->kind) {
+        case TY_I8: case TY_U8: return 1;
+        case TY_PTR: return t->is_array ? type_align(t->pointee) : 2;
+        case TY_STRUCT: return t->struct_def->align;
+        default: return 2;
+    }
+}
+
 int type_is_signed(const Type *t) {
     switch (t->kind) {
         case TY_I8: case TY_I16: case TY_I32: return 1;
@@ -73,21 +85,27 @@ StructDef *struct_def_new(const char *name, char **field_names, Type **field_typ
     sd->fields = xalloc(sizeof(StructField) * (nfields ? nfields : 1));
     sd->nfields = nfields;
     sd->is_union = is_union;
-    int offset = 0, max_size = 0;
+    int offset = 0, max_size = 0, align = 1;
     for (int i = 0; i < nfields; i++) {
         int fsize = type_size(field_types[i]);
+        int falign = type_align(field_types[i]);
+        if (falign > align) align = falign;
         sd->fields[i].name = strdup(field_names[i]);
         sd->fields[i].type = field_types[i];
         if (is_union) {
             sd->fields[i].offset = 0;
             if (fsize > max_size) max_size = fsize;
         } else {
-            offset = (offset + 1) & ~1; /* align2, matching the backend's frame/global layout */
+            /* BUG-13 da Sirius32: só campo word/dword/ponteiro alinha em
+               endereço par; bytes consecutivos empacotam. */
+            offset = (offset + falign - 1) & ~(falign - 1);
             sd->fields[i].offset = offset;
             offset += fsize;
         }
     }
-    sd->size = is_union ? ((max_size + 1) & ~1) : ((offset + 1) & ~1);
+    sd->align = align;
+    int raw = is_union ? max_size : offset;
+    sd->size = (raw + align - 1) & ~(align - 1);
     return sd;
 }
 
@@ -232,6 +250,11 @@ static void dump_stmt(Stmt *s, int lvl) {
             printf("While\n");
             dump_expr(s->cond, lvl + 1);
             dump_stmt(s->body, lvl + 1);
+            break;
+        case STMT_DO_WHILE:
+            printf("DoWhile\n");
+            dump_stmt(s->body, lvl + 1);
+            dump_expr(s->cond, lvl + 1);
             break;
         case STMT_FOR:
             printf("For\n");
