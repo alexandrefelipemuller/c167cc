@@ -195,6 +195,19 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
       workdir : meson.source_root())
   endforeach
 
+  # BUG-17 da Sirius32 (02/10/2026): cast no inicializador não troca mais o
+  # tipo da variável declarada (nem o dos declaradores seguintes), e
+  # `int32_t >> n` usa ASHR na palavra alta. n = 0x8765F234: n >> 4 =
+  # 0xF8765F23. W = 0x1234: w = 0x34 + 0x300; b = 0x34; second = 0x1234.
+  # Com o bug, OUT_HI=0 (n era uint16_t), OUT_WORD=52 e OUT_SECOND=104.
+  test('sim-decl_cast_init_global',
+    find_program('sim_validate.sh'),
+    args : [c167cc_exe.full_path(), meson.source_root() / 'examples' / 'decl_cast_init_global.c',
+            'decl_cast_init_global', 'LO=-3532', 'HI=-30875', 'W=4660', '--',
+            'OUT_HI=-30875', 'OUT_LO=-3532', 'OUT_ASHR_HI=-1930', 'OUT_ASHR_LO=24355',
+            'OUT_WORD=820', 'OUT_BYTE=52', 'OUT_SECOND=4712'],
+    workdir : meson.source_root())
+
   foreach c : sim_cases
     test('sim-' + c[0],
       find_program('sim_validate.sh'),

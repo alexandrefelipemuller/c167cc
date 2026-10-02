@@ -846,6 +846,9 @@ static Word w_binop(Builder *b, OpKind op, Word x, Word y, int is_signed, SrcLoc
     IrInst *i = emit(b, IR_BINOP);
     i->dst = new_vreg(b); i->op = op; i->a = xv; i->b = yv;
     i->size = 2; i->is_signed = is_signed; i->loc = loc;
+    /* `>>` com sinal na palavra alta de um int32_t: ASHR (mesma marca do
+       BUG-16 em gen_expr - o codegen decide por `imm`, não por is_signed). */
+    if (op == OP_SHR && is_signed) i->imm = 1;
     return w_reg(i->dst);
 }
 

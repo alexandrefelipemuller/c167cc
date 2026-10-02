@@ -30,6 +30,17 @@ static void clear_attrs(void) { pend_attrs = ATTR_NONE; pend_addr = 0; pend_vec 
 /* base type shared by all declarators in a `type_spec declarator, declarator, ...;`
    declaration; set by a mid-rule action right after type_spec is reduced */
 static Type *g_decl_base_type = NULL;
+/* BUG-17 da Sirius32 (02/10/2026): o type_spec de um CAST dentro do
+   inicializador (`int32_t n = ... | (uint16_t)lo;`) também passa por aqui e
+   sobrescrevia o tipo-base da declaração em andamento - como a ação de
+   decl_declarator só roda DEPOIS do init_opt, `n` saía declarado com o tipo
+   do último cast. A regra de cast restaura o valor anterior logo após o
+   `)` (ver unary_expr). */
+static Type *g_prev_decl_base_type = NULL;
+static void set_decl_base_type(Type *t) {
+    g_prev_decl_base_type = g_decl_base_type;
+    g_decl_base_type = t;
+}
 
 /* enum constants: a flat, unscoped name->value table (parser-global, like a
    simple macro table). An enum constant reference is folded directly into an
@@ -479,41 +490,41 @@ init_list_items:
     ;
 
 type_spec:
-      KW_VOID { $$ = type_new(TY_VOID); g_decl_base_type = $$; }
-    | KW_CHAR { $$ = type_new(TY_I8); g_decl_base_type = $$; }
-    | KW_SIGNED KW_CHAR { $$ = type_new(TY_I8); g_decl_base_type = $$; }
-    | KW_UNSIGNED KW_CHAR { $$ = type_new(TY_U8); g_decl_base_type = $$; }
-    | KW_SIGNED { $$ = type_new(TY_I16); g_decl_base_type = $$; }
-    | KW_UNSIGNED { $$ = type_new(TY_U16); g_decl_base_type = $$; }
-    | KW_I8 { $$ = type_new(TY_I8); g_decl_base_type = $$; }
-    | KW_U8 { $$ = type_new(TY_U8); g_decl_base_type = $$; }
-    | KW_I16 { $$ = type_new(TY_I16); g_decl_base_type = $$; }
-    | KW_U16 { $$ = type_new(TY_U16); g_decl_base_type = $$; }
-    | KW_I32 { $$ = type_new(TY_I32); g_decl_base_type = $$; }
-    | KW_U32 { $$ = type_new(TY_U32); g_decl_base_type = $$; }
+      KW_VOID { $$ = type_new(TY_VOID); set_decl_base_type($$); }
+    | KW_CHAR { $$ = type_new(TY_I8); set_decl_base_type($$); }
+    | KW_SIGNED KW_CHAR { $$ = type_new(TY_I8); set_decl_base_type($$); }
+    | KW_UNSIGNED KW_CHAR { $$ = type_new(TY_U8); set_decl_base_type($$); }
+    | KW_SIGNED { $$ = type_new(TY_I16); set_decl_base_type($$); }
+    | KW_UNSIGNED { $$ = type_new(TY_U16); set_decl_base_type($$); }
+    | KW_I8 { $$ = type_new(TY_I8); set_decl_base_type($$); }
+    | KW_U8 { $$ = type_new(TY_U8); set_decl_base_type($$); }
+    | KW_I16 { $$ = type_new(TY_I16); set_decl_base_type($$); }
+    | KW_U16 { $$ = type_new(TY_U16); set_decl_base_type($$); }
+    | KW_I32 { $$ = type_new(TY_I32); set_decl_base_type($$); }
+    | KW_U32 { $$ = type_new(TY_U32); set_decl_base_type($$); }
     | KW_ENUM IDENT '{' { enum_reset(); } enumerator_list '}'
-      { $$ = type_new(TY_I16); g_decl_base_type = $$; }
+      { $$ = type_new(TY_I16); set_decl_base_type($$); }
     | KW_ENUM '{' { enum_reset(); } enumerator_list '}'
-      { $$ = type_new(TY_I16); g_decl_base_type = $$; }
-    | KW_ENUM IDENT { $$ = type_new(TY_I16); g_decl_base_type = $$; }
+      { $$ = type_new(TY_I16); set_decl_base_type($$); }
+    | KW_ENUM IDENT { $$ = type_new(TY_I16); set_decl_base_type($$); }
     | KW_STRUCT IDENT '{' { struct_field_reset(); } struct_field_list '}'
       {
         StructDef *sd = struct_def_new($2, g_field_names, g_field_types, g_field_n, 0);
         struct_type_register($2, sd);
         $$ = struct_type_lookup($2);
-        g_decl_base_type = $$;
+        set_decl_base_type($$);
       }
     | KW_STRUCT IDENT
-      { $$ = struct_type_lookup_checked($2, 0); g_decl_base_type = $$; }
+      { $$ = struct_type_lookup_checked($2, 0); set_decl_base_type($$); }
     | KW_UNION IDENT '{' { struct_field_reset(); } struct_field_list '}'
       {
         StructDef *sd = struct_def_new($2, g_field_names, g_field_types, g_field_n, 1);
         struct_type_register($2, sd);
         $$ = struct_type_lookup($2);
-        g_decl_base_type = $$;
+        set_decl_base_type($$);
       }
     | KW_UNION IDENT
-      { $$ = struct_type_lookup_checked($2, 1); g_decl_base_type = $$; }
+      { $$ = struct_type_lookup_checked($2, 1); set_decl_base_type($$); }
     ;
 
 /* Every type_spec reduction also records the base type for any
@@ -804,10 +815,10 @@ unary_expr:
     | '*' unary_expr %prec UNARY { Expr *e = expr_new(EXPR_DEREF, loc()); e->rhs = $2; $$ = e; }
     | OP_INC unary_expr { Expr *e = expr_new(EXPR_PREINC, loc()); e->lhs = $2; $$ = e; }
     | OP_DEC unary_expr { Expr *e = expr_new(EXPR_PREDEC, loc()); e->lhs = $2; $$ = e; }
-    | '(' qual_opt type_spec ptr_opt ')' unary_expr %prec UNARY
+    | '(' qual_opt type_spec ptr_opt ')' { g_decl_base_type = g_prev_decl_base_type; } unary_expr %prec UNARY
       {
         Type *t = $4 ? type_new_ptr($3) : $3;
-        Expr *e = expr_new(EXPR_CAST, loc()); e->cast_type = t; e->rhs = $6; $$ = e;
+        Expr *e = expr_new(EXPR_CAST, loc()); e->cast_type = t; e->rhs = $7; $$ = e;
       }
     ;
 
