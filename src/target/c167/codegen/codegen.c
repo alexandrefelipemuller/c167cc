@@ -232,6 +232,27 @@ static void emit_prologue(CG *cg) {
         snprintf(ops, sizeof(ops), "[R15+#%d], %s", p->stack_offset, c167_reg_name(c167_arg_regs[i]));
         char cmt[64]; snprintf(cmt, sizeof(cmt), "spill incoming parameter '%s'", p->name);
         emit_raw(cg, NULL, mn, ops, cmt);
+        if (!p->type->is_array && (p->type->kind == TY_U32 || p->type->kind == TY_I32)) {
+            /* A ABI passa 1 registrador por argumento: de um parâmetro de
+               32 bits só chega a palavra baixa. Agora que as expressões de
+               32 bits leem as duas palavras (BUG-11 da Sirius32), a palavra
+               alta do slot não pode ficar com lixo da pilha: grava a
+               extensão (zero em uint32_t, sinal em int32_t) da palavra
+               baixa recebida. */
+            const char *scratch = c167_reg_name(C167_SPILL_SCRATCH_1);
+            char o2[64];
+            if (p->type->kind == TY_I32) {
+                snprintf(o2, sizeof(o2), "%s, %s", scratch, c167_reg_name(c167_arg_regs[i]));
+                emit_raw(cg, NULL, "MOV", o2, NULL);
+                snprintf(o2, sizeof(o2), "%s, #15", scratch);
+                emit_raw(cg, NULL, "ASHR", o2, "32-bit parameter: only the low word is passed, sign-extend it");
+            } else {
+                snprintf(o2, sizeof(o2), "%s, #0", scratch);
+                emit_raw(cg, NULL, "MOV", o2, "32-bit parameter: only the low word is passed, zero-extend it");
+            }
+            snprintf(o2, sizeof(o2), "[R15+#%d], %s", p->stack_offset + 2, scratch);
+            emit_raw(cg, NULL, "MOV", o2, NULL);
+        }
     }
 }
 
@@ -261,6 +282,12 @@ static void gen_sym_addr_to(CG *cg, Symbol *sym, C167Reg dst) {
     }
 }
 
+/* Contador dos rótulos `_cmp_true_N`/`_cmp_end_N` (comparação de 16 bits) e
+   `_cmp32_true_N`/`_cmp32_end_N` (32 bits). Um só pros dois, pra numeração
+   dos rótulos das comparações de 16 bits não depender de quantas
+   comparações viraram de 32 bits antes delas no arquivo. */
+static int cmp_label_uid = 0;
+
 static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
     emit_loc_comment(cg, i->loc);
     switch (i->kind) {
@@ -275,11 +302,23 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
             const char *d = dst_target(cg, i->dst);
             const char *mn = i->size == 1 ? "MOVB" : "MOV";
             char ops[80];
-            if (i->sym->kind == SYM_LOCAL || i->sym->kind == SYM_PARAM)
-                snprintf(ops, sizeof(ops), "%s, [R15+#%d]", d, i->sym->stack_offset);
-            else
-                snprintf(ops, sizeof(ops), "%s, %s", d, i->sym->name);
-            char cmt[80]; snprintf(cmt, sizeof(cmt), "%s = %s", d, i->sym->name);
+            /* i->imm = deslocamento em bytes dentro do símbolo (2 = palavra
+               alta de um uint32_t/int32_t - ver Val32 em ir_build.c); 0 em
+               todo o código de 16 bits. */
+            char cmt[96];
+            if (i->imm) {
+                if (i->sym->kind == SYM_LOCAL || i->sym->kind == SYM_PARAM)
+                    snprintf(ops, sizeof(ops), "%s, [R15+#%d]", d, i->sym->stack_offset + (int)i->imm);
+                else
+                    snprintf(ops, sizeof(ops), "%s, %s+%ld", d, i->sym->name, i->imm);
+                snprintf(cmt, sizeof(cmt), "%s = %s (high word)", d, i->sym->name);
+            } else {
+                if (i->sym->kind == SYM_LOCAL || i->sym->kind == SYM_PARAM)
+                    snprintf(ops, sizeof(ops), "%s, [R15+#%d]", d, i->sym->stack_offset);
+                else
+                    snprintf(ops, sizeof(ops), "%s, %s", d, i->sym->name);
+                snprintf(cmt, sizeof(cmt), "%s = %s", d, i->sym->name);
+            }
             emit_raw(cg, NULL, mn, ops, cmt);
             if (i->size == 1) {
                 /* mesmo bug/fix do IR_LOAD_MEM acima (achado 21/08/2026
@@ -316,11 +355,21 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
             const char *s = load_operand(cg, i->a, C167_SPILL_SCRATCH_1);
             const char *mn = i->size == 1 ? "MOVB" : "MOV";
             char ops[80];
-            if (i->sym->kind == SYM_LOCAL || i->sym->kind == SYM_PARAM)
-                snprintf(ops, sizeof(ops), "[R15+#%d], %s", i->sym->stack_offset, s);
-            else
-                snprintf(ops, sizeof(ops), "%s, %s", i->sym->name, s);
-            char cmt[80]; snprintf(cmt, sizeof(cmt), "%s = %s", i->sym->name, s);
+            char cmt[96];
+            if (i->imm) {
+                /* palavra alta de um símbolo de 32 bits (ver IR_LOAD_SYM) */
+                if (i->sym->kind == SYM_LOCAL || i->sym->kind == SYM_PARAM)
+                    snprintf(ops, sizeof(ops), "[R15+#%d], %s", i->sym->stack_offset + (int)i->imm, s);
+                else
+                    snprintf(ops, sizeof(ops), "%s+%ld, %s", i->sym->name, i->imm, s);
+                snprintf(cmt, sizeof(cmt), "%s (high word) = %s", i->sym->name, s);
+            } else {
+                if (i->sym->kind == SYM_LOCAL || i->sym->kind == SYM_PARAM)
+                    snprintf(ops, sizeof(ops), "[R15+#%d], %s", i->sym->stack_offset, s);
+                else
+                    snprintf(ops, sizeof(ops), "%s, %s", i->sym->name, s);
+                snprintf(cmt, sizeof(cmt), "%s = %s", i->sym->name, s);
+            }
             emit_raw(cg, NULL, mn, ops, cmt);
             break;
         }
@@ -479,6 +528,115 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
             const char *d = dst_target(cg, i->dst);
             char ops3[32]; snprintf(ops3, sizeof(ops3), "%s, %s", d, i->op == OP_DIV ? "MDL" : "MDH");
             emit_raw(cg, NULL, "MOV", ops3, i->op == OP_DIV ? "quotient" : "remainder");
+            finish_dst(cg, i->dst);
+            break;
+        }
+
+        /* ---- 32 bits como par de palavras (BUG-6/7/8/10/11/15 da
+           Sirius32) - ver o comentário em ir.h e Val32 em ir_build.c ---- */
+        case IR_CARRYOP: {
+            /* imm == 0: ADD/SUB da palavra baixa; imm == 1: ADDC/SUBC da
+               palavra alta. Entre as duas só saem MOV (recarga de operando
+               em spill, cópia pro destino, gravação do destino em spill),
+               e MOV não altera o flag C no C166 (manual: C "-"). */
+            const char *mn = (i->op == OP_ADD) ? (i->imm ? "ADDC" : "ADD") : (i->imm ? "SUBC" : "SUB");
+            const char *a = load_operand(cg, i->a, C167_SPILL_SCRATCH_1);
+            const char *d = dst_target(cg, i->dst);
+            if (strcmp(a, d) != 0) { char ops[48]; snprintf(ops, sizeof(ops), "%s, %s", d, a); emit_raw(cg, NULL, "MOV", ops, NULL); }
+            const char *bsrc = load_operand(cg, i->b, C167_SPILL_SCRATCH_2);
+            char ops[48]; snprintf(ops, sizeof(ops), "%s, %s", d, bsrc);
+            emit_raw(cg, NULL, mn, ops, i->imm ? "high word, with carry from the low word" : "low word of 32-bit operation");
+            finish_dst(cg, i->dst);
+            break;
+        }
+        case IR_MULW: {
+            const char *a = load_operand(cg, i->a, C167_SPILL_SCRATCH_1);
+            const char *bsrc = load_operand(cg, i->b, C167_SPILL_SCRATCH_2);
+            char ops[48]; snprintf(ops, sizeof(ops), "%s, %s", a, bsrc);
+            emit_raw(cg, NULL, i->is_signed ? "MUL" : "MULU", ops, "16x16->32 product in MDH:MDL");
+            const char *d = dst_target(cg, i->dst);
+            char ops2[32]; snprintf(ops2, sizeof(ops2), "%s, MDL", d);
+            emit_raw(cg, NULL, "MOV", ops2, "low word of 32-bit product");
+            finish_dst(cg, i->dst);
+            break;
+        }
+        case IR_MDH: {
+            const char *d = dst_target(cg, i->dst);
+            char ops[32]; snprintf(ops, sizeof(ops), "%s, MDH", d);
+            emit_raw(cg, NULL, "MOV", ops, "high word of 32-bit product");
+            finish_dst(cg, i->dst);
+            break;
+        }
+        case IR_SEXT16: {
+            const char *a = load_operand(cg, i->a, C167_SPILL_SCRATCH_1);
+            const char *d = dst_target(cg, i->dst);
+            if (strcmp(a, d) != 0) { char ops[48]; snprintf(ops, sizeof(ops), "%s, %s", d, a); emit_raw(cg, NULL, "MOV", ops, NULL); }
+            char ops2[32]; snprintf(ops2, sizeof(ops2), "%s, #15", d);
+            emit_raw(cg, NULL, "ASHR", ops2, "high word = sign extension of the low word");
+            finish_dst(cg, i->dst);
+            break;
+        }
+        case IR_CMP32: {
+            /* Comparação de 32 bits. ==/!=: compara palavra por palavra
+               (CMP + cc_NZ em cada uma), sem depender do flag Z encadeado
+               de SUBC. </>=: CMP das palavras baixas + SUBC das altas num
+               registrador de rascunho; o C (sem sinal) ou N/V (com sinal)
+               depois do SUBC valem pro valor inteiro de 32 bits. >/<=
+               chegam aqui com os operandos trocados (ver gen_cmp32). */
+            int uid32 = ++cmp_label_uid;
+            char lt[256], le[256];
+            snprintf(lt, sizeof(lt), ".L%s_cmp32_true_%d", cg->fn->name, uid32);
+            snprintf(le, sizeof(le), ".L%s_cmp32_end_%d", cg->fn->name, uid32);
+            const char *s1 = c167_reg_name(C167_SPILL_SCRATCH_1);
+            char ops[64], j[300];
+            const char *al = load_operand(cg, i->a, C167_SPILL_SCRATCH_1);
+            const char *bl = load_operand(cg, i->b, C167_SPILL_SCRATCH_2);
+            snprintf(ops, sizeof(ops), "%s, %s", al, bl);
+            emit_raw(cg, NULL, "CMP", ops, "32-bit compare: low words");
+            int first_val; /* valor de dst quando NÃO salta pra lt */
+            if (i->op == OP_EQ || i->op == OP_NE) {
+                snprintf(j, sizeof(j), "cc_NZ, %s", lt); emit_raw(cg, NULL, "JMPR", j, NULL);
+                const char *ah = load_operand(cg, i->args[0], C167_SPILL_SCRATCH_1);
+                const char *bh = load_operand(cg, i->args[1], C167_SPILL_SCRATCH_2);
+                snprintf(ops, sizeof(ops), "%s, %s", ah, bh);
+                emit_raw(cg, NULL, "CMP", ops, "32-bit compare: high words");
+                emit_raw(cg, NULL, "JMPR", j, NULL);
+                first_val = (i->op == OP_EQ); /* caiu aqui: as duas palavras iguais */
+            } else {
+                const char *ah = load_operand(cg, i->args[0], C167_SPILL_SCRATCH_1);
+                if (strcmp(ah, s1) != 0) { snprintf(ops, sizeof(ops), "%s, %s", s1, ah); emit_raw(cg, NULL, "MOV", ops, NULL); }
+                const char *bh = load_operand(cg, i->args[1], C167_SPILL_SCRATCH_2);
+                snprintf(ops, sizeof(ops), "%s, %s", s1, bh);
+                emit_raw(cg, NULL, "SUBC", ops, "32-bit compare: high words, with borrow");
+                const char *cc = (i->op == OP_LT) ? (i->is_signed ? "cc_SLT" : "cc_C")
+                                                  : (i->is_signed ? "cc_SGE" : "cc_NC");
+                snprintf(j, sizeof(j), "%s, %s", cc, lt); emit_raw(cg, NULL, "JMPR", j, NULL);
+                first_val = 0;
+            }
+            const char *d = dst_target(cg, i->dst);
+            char m[32];
+            snprintf(m, sizeof(m), "%s, #%d", d, first_val); emit_raw(cg, NULL, "MOV", m, NULL);
+            snprintf(j, sizeof(j), "cc_UC, %s", le); emit_raw(cg, NULL, "JMPR", j, NULL);
+            emit_raw(cg, lt, NULL, NULL, NULL);
+            snprintf(m, sizeof(m), "%s, #%d", d, !first_val); emit_raw(cg, NULL, "MOV", m, NULL);
+            emit_raw(cg, le, NULL, NULL, NULL);
+            finish_dst(cg, i->dst);
+            break;
+        }
+        case IR_DIV32: {
+            /* Forma geral de IR_DIV32_SYM: o dividendo é um par de vregs
+               (a = palavra baixa -> MDL, b = palavra alta -> MDH). Divisor
+               primeiro, em SCRATCH_2, como em IR_DIV32_SYM. */
+            const char *dv = load_operand(cg, i->args[0], C167_SPILL_SCRATCH_2);
+            char ops[48];
+            const char *lo = load_operand(cg, i->a, C167_SPILL_SCRATCH_1);
+            snprintf(ops, sizeof(ops), "MDL, %s", lo); emit_raw(cg, NULL, "MOV", ops, "low word of 32-bit dividend");
+            const char *hi = load_operand(cg, i->b, C167_SPILL_SCRATCH_1);
+            snprintf(ops, sizeof(ops), "MDH, %s", hi); emit_raw(cg, NULL, "MOV", ops, "high word of 32-bit dividend");
+            emit_raw(cg, NULL, i->is_signed ? "DIVL" : "DIVLU", dv, NULL);
+            const char *d = dst_target(cg, i->dst);
+            snprintf(ops, sizeof(ops), "%s, %s", d, i->op == OP_DIV ? "MDL" : "MDH");
+            emit_raw(cg, NULL, "MOV", ops, i->op == OP_DIV ? "quotient" : "remainder");
             finish_dst(cg, i->dst);
             break;
         }
@@ -701,7 +859,7 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
                 const char *bsrc = load_operand(cg, i->b, C167_SPILL_SCRATCH_2);
                 const char *d = dst_target(cg, i->dst);
                 char ops[48]; snprintf(ops, sizeof(ops), "%s, %s", a, bsrc); emit_raw(cg, NULL, "CMP", ops, NULL);
-                static int uid = 0; uid++;
+                int uid = ++cmp_label_uid;
                 /* Mesmo achado do IR_UNOP/OP_NOT acima (02/09/2026): nome
                    da função incluído pra não colidir entre arquivos
                    compilados separadamente e depois concatenados. */

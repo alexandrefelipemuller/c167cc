@@ -30,6 +30,10 @@ golden_examples = [
   # BUG-9/BUG-16 da Sirius32 (01/10/2026): `(int8_t)` de `uint8_t` estende o
   # sinal; `>>` com sinal é ASHR e sem sinal continua SHR.
   'sign_cast_shift',
+  # BUG-6/7/8/10/11/15 da Sirius32 (01/10/2026): casos mínimos de expressão
+  # uint32_t que era rebaixada pra 16 bits (ADDC/SUBC, palavra alta gravada,
+  # constante de 32 bits, ternário, comparação das duas palavras, DIVLU).
+  'wide32_bugs',
 ]
 
 foreach name : golden_examples
@@ -288,6 +292,160 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
       workdir : meson.source_root())
   endforeach
 
+  # ---- 32 bits como par de palavras (BUG-6/7/8/10/11/15 da Sirius32) ----
+  # Mesma função pra vários conjuntos de entrada, por isso fora de sim_cases
+  # (lá o nome do teste é também o label da função). Valores esperados
+  # calculados em Python com aritmética de 32 bits; a saída do simulador é
+  # impressa como int16.
+  # BUG-8/BUG-10/BUG-11 da Sirius32 (01/10/2026): +, -, negação, ternário,
+  # constante, ++/+=, &|^ e deslocamento de uint32_t com as DUAS palavras
+  # (ADD/ADDC, SUB/SUBC). Casos: vai-um da palavra baixa pra alta
+  # (0x0001FFFF + 0x00020001), sem vai-um, empréstimo atravessando
+  # (0x80000000 - 0x7FFFFFFF), 0 - 1 e 0xFFFFFFFF + 1 (estouro de 32 bits).
+  wide32_arith_global_cases = [
+    ['0',
+     ['AHI=1', 'ALO=65535', 'BHI=2', 'BLO=1', 'X=65535', 'NEG=1'],
+     ['SUM_HI=4', 'SUM_LO=0', 'DIF_HI=-1', 'DIF_LO=-2', 'ADX_HI=2', 'ADX_LO=-2', 'TER_HI=-2', 'TER_LO=1', 'K_HI=4', 'K_LO=-12145', 'INC_HI=3', 'INC_LO=0', 'BIT_HI=254', 'BIT_LO=-255', 'SHL_HI=31', 'SHL_LO=-16', 'SHR_HI=0', 'SHR_LO=16384']],
+    ['1',
+     ['AHI=4660', 'ALO=1', 'BHI=564', 'BLO=2', 'X=5', 'NEG=0'],
+     ['SUM_HI=5224', 'SUM_LO=3', 'DIF_HI=4095', 'DIF_LO=-1', 'ADX_HI=4660', 'ADX_LO=6', 'TER_HI=4660', 'TER_LO=1', 'K_HI=3', 'K_LO=-12139', 'INC_HI=4661', 'INC_LO=2', 'BIT_HI=4863', 'BIT_LO=254', 'SHL_HI=9024', 'SHL_LO=16', 'SHR_HI=326', 'SHR_LO=-32768']],
+    ['2',
+     ['AHI=32768', 'ALO=0', 'BHI=32767', 'BLO=65535', 'X=1', 'NEG=1'],
+     ['SUM_HI=-1', 'SUM_LO=-1', 'DIF_HI=0', 'DIF_LO=1', 'ADX_HI=-32768', 'ADX_LO=1', 'TER_HI=-32768', 'TER_LO=0', 'K_HI=3', 'K_LO=-12143', 'INC_HI=-32767', 'INC_LO=1', 'BIT_HI=-32513', 'BIT_LO=255', 'SHL_HI=0', 'SHL_LO=0', 'SHR_HI=4095', 'SHR_LO=-1']],
+    ['3',
+     ['AHI=0', 'ALO=0', 'BHI=0', 'BLO=1', 'X=0', 'NEG=1'],
+     ['SUM_HI=0', 'SUM_LO=1', 'DIF_HI=-1', 'DIF_LO=-1', 'ADX_HI=0', 'ADX_LO=0', 'TER_HI=0', 'TER_LO=0', 'K_HI=3', 'K_LO=-12144', 'INC_HI=1', 'INC_LO=1', 'BIT_HI=255', 'BIT_LO=255', 'SHL_HI=0', 'SHL_LO=0', 'SHR_HI=0', 'SHR_LO=0']],
+    ['4',
+     ['AHI=65535', 'ALO=65535', 'BHI=0', 'BLO=1', 'X=65535', 'NEG=0'],
+     ['SUM_HI=0', 'SUM_LO=0', 'DIF_HI=-1', 'DIF_LO=-2', 'ADX_HI=0', 'ADX_LO=-2', 'TER_HI=-1', 'TER_LO=-1', 'K_HI=4', 'K_LO=-12145', 'INC_HI=1', 'INC_LO=0', 'BIT_HI=-256', 'BIT_LO=-255', 'SHL_HI=-1', 'SHL_LO=-16', 'SHR_HI=0', 'SHR_LO=0']],
+  ]
+  foreach c : wide32_arith_global_cases
+    test('sim-wide32_arith_global_' + c[0],
+      find_program('sim_validate.sh'),
+      args : [c167cc_exe.full_path(), meson.source_root() / 'examples' / 'wide32_arith_global.c',
+              'wide32_arith_global'] + c[1] + ['--'] + c[2],
+      workdir : meson.source_root())
+  endforeach
+
+  # BUG-11 da Sirius32: <, >, <=, >=, ==, != de uint32_t/int32_t comparando
+  # as duas palavras. Casos: palavra alta maior com a baixa MENOR (e o
+  # inverso - a comparação só da palavra baixa dá o contrário), iguais,
+  # altas diferentes/baixas iguais, altas iguais/baixas diferentes, sinais
+  # diferentes (int32_t negativo < positivo, que sem sinal é o contrário) e
+  # baixas que só diferem no bit 15. ==/!= são dois CMP de palavra (cc_NZ):
+  # NÃO dependem do flag Z encadeado de SUBC (BUG-12 da Sirius32, no
+  # simulador). </>= usam C (sem sinal) ou N/V (com sinal) depois de
+  # CMP+SUBC; o caso 0x80000000 vs 0x7FFFFFFF com sinal fica de fora porque
+  # o c166sim.py calcula o V do SUBC a partir de (op2 + carry), errado quando
+  # op2 = 0x7FFF e há empréstimo (o código gerado está certo pelo manual).
+  wide32_cmp_global_cases = [
+    ['0',
+     ['AHI=1', 'ALO=0', 'BHI=0', 'BLO=65535'],
+     ['OUT_U=42', 'OUT_S=42', 'OUT_K=26', 'OUT_C=5']],
+    ['1',
+     ['AHI=0', 'ALO=65535', 'BHI=1', 'BLO=0'],
+     ['OUT_U=37', 'OUT_S=37', 'OUT_K=9', 'OUT_C=5']],
+    ['2',
+     ['AHI=5', 'ALO=7', 'BHI=5', 'BLO=7'],
+     ['OUT_U=28', 'OUT_S=28', 'OUT_K=10', 'OUT_C=4']],
+    ['3',
+     ['AHI=5', 'ALO=7', 'BHI=6', 'BLO=7'],
+     ['OUT_U=37', 'OUT_S=37', 'OUT_K=10', 'OUT_C=5']],
+    ['4',
+     ['AHI=6', 'ALO=7', 'BHI=5', 'BLO=7'],
+     ['OUT_U=42', 'OUT_S=42', 'OUT_K=10', 'OUT_C=5']],
+    ['5',
+     ['AHI=5', 'ALO=7', 'BHI=5', 'BLO=8'],
+     ['OUT_U=37', 'OUT_S=37', 'OUT_K=10', 'OUT_C=5']],
+    ['6',
+     ['AHI=5', 'ALO=9', 'BHI=5', 'BLO=8'],
+     ['OUT_U=42', 'OUT_S=42', 'OUT_K=10', 'OUT_C=5']],
+    ['7',
+     ['AHI=65535', 'ALO=65534', 'BHI=0', 'BLO=1'],
+     ['OUT_U=42', 'OUT_S=37', 'OUT_K=2', 'OUT_C=5']],
+    ['8',
+     ['AHI=0', 'ALO=1', 'BHI=65535', 'BLO=65534'],
+     ['OUT_U=37', 'OUT_S=42', 'OUT_K=1', 'OUT_C=5']],
+    ['9',
+     ['AHI=32768', 'ALO=1', 'BHI=32767', 'BLO=0'],
+     ['OUT_U=42', 'OUT_S=37', 'OUT_K=6', 'OUT_C=5']],
+    ['10',
+     ['AHI=32767', 'ALO=0', 'BHI=32768', 'BLO=1'],
+     ['OUT_U=37', 'OUT_S=42', 'OUT_K=10', 'OUT_C=5']],
+    ['11',
+     ['AHI=0', 'ALO=0', 'BHI=0', 'BLO=0'],
+     ['OUT_U=28', 'OUT_S=28', 'OUT_K=1', 'OUT_C=2']],
+    ['12',
+     ['AHI=65535', 'ALO=32767', 'BHI=65535', 'BLO=32768'],
+     ['OUT_U=37', 'OUT_S=37', 'OUT_K=6', 'OUT_C=5']],
+    ['13',
+     ['AHI=0', 'ALO=32768', 'BHI=0', 'BLO=32767'],
+     ['OUT_U=42', 'OUT_S=42', 'OUT_K=9', 'OUT_C=5']],
+  ]
+  foreach c : wide32_cmp_global_cases
+    test('sim-wide32_cmp_global_' + c[0],
+      find_program('sim_validate.sh'),
+      args : [c167cc_exe.full_path(), meson.source_root() / 'examples' / 'wide32_cmp_global.c',
+              'wide32_cmp_global'] + c[1] + ['--'] + c[2],
+      workdir : meson.source_root())
+  endforeach
+
+  # BUG-6/BUG-7/BUG-15 da Sirius32: x + a*b com ADDC do MDH (inclui vai-um
+  # da soma das palavras baixas e operandos >= 0x8000, MULU de verdade),
+  # quociente uint32_t = n / d com a palavra alta gravada (= 0; a variável
+  # começa em 0xFFFFFFFF), ((uint32_t)hi << 16) | lo direto como dividendo
+  # de / e % (MDH:MDL + DIVLU), 32x16 com produto cruzado e (n + x) / d.
+  wide32_muldiv_global_cases = [
+    ['0',
+     ['X=65535', 'MA=4660', 'MB=256', 'NHI=18', 'NLO=13398', 'D=4096'],
+     ['B6_HI=19', 'B6_LO=13311', 'B7_HI=0', 'B7_LO=291', 'B15_Q=291', 'B15_R=1110', 'MW_HI=19296', 'MW_LO=-21128', 'DM_Q=307']],
+    ['1',
+     ['X=32768', 'MA=65535', 'MB=65535', 'NHI=1', 'NLO=0', 'D=2'],
+     ['B6_HI=-2', 'B6_LO=-32767', 'B7_HI=0', 'B7_LO=-32768', 'B15_Q=-32768', 'B15_R=0', 'MW_HI=-1', 'MW_LO=0', 'DM_Q=-16384']],
+    ['2',
+     ['X=1', 'MA=2', 'MB=3', 'NHI=0', 'NLO=100', 'D=7'],
+     ['B6_HI=0', 'B6_LO=7', 'B7_HI=0', 'B7_LO=14', 'B15_Q=14', 'B15_R=2', 'MW_HI=0', 'MW_LO=200', 'DM_Q=14']],
+    ['3',
+     ['X=61440', 'MA=49152', 'MB=32772', 'NHI=255', 'NLO=65535', 'D=32767'],
+     ['B6_HI=24579', 'B6_LO=-4096', 'B7_HI=0', 'B7_LO=512', 'B15_Q=512', 'B15_R=511', 'MW_HI=-1', 'MW_LO=16384', 'DM_Q=513']],
+  ]
+  foreach c : wide32_muldiv_global_cases
+    test('sim-wide32_muldiv_global_' + c[0],
+      find_program('sim_validate.sh'),
+      args : [c167cc_exe.full_path(), meson.source_root() / 'examples' / 'wide32_muldiv_global.c',
+              'wide32_muldiv_global'] + c[1] + ['--'] + c[2],
+      workdir : meson.source_root())
+  endforeach
+
+  # BUG-11 da Sirius32: uint32_t por ponteiro ([reg] e [reg+2]), int16_t
+  # alargado com extensão de sinal (soma/subtração saturada em int32_t, o
+  # padrão de core/aritmetica/lote_s_saturada_diversos.c da Sirius32, que
+  # antes nunca saturava), produto com sinal (MUL) somado, e uma expressão
+  # com muitas palavras vivas (spill no meio de ADD/ADDC).
+  wide32_misc_global_cases = [
+    ['0',
+     ['S1=30000', 'S2=30000', 'U1=65535', 'U2=65535'],
+     ['PT_HI=3', 'PT_LO=1', 'SAT_ADD=32767', 'SAT_SUB=0', 'SP_HI=13733', 'SP_LO=24112', 'MIX_HI=0', 'MIX_LO=-9033']],
+    ['1',
+     ['S1=-30000', 'S2=30000', 'U1=4660', 'U2=32769'],
+     ['PT_HI=4663', 'PT_LO=5', 'SAT_ADD=0', 'SAT_SUB=-32768', 'SP_HI=-13734', 'SP_LO=-24112', 'MIX_HI=2329', 'MIX_LO=19080']],
+    ['2',
+     ['S1=-30000', 'S2=-30000', 'U1=1', 'U2=2'],
+     ['PT_HI=3', 'PT_LO=7', 'SAT_ADD=-32768', 'SAT_SUB=0', 'SP_HI=13732', 'SP_LO=29648', 'MIX_HI=-1', 'MIX_LO=-9029']],
+    ['3',
+     ['S1=100', 'S2=-7', 'U1=32768', 'U2=32767'],
+     ['PT_HI=-32765', 'PT_LO=1', 'SAT_ADD=93', 'SAT_SUB=107', 'SP_HI=-1', 'SP_LO=-600', 'MIX_HI=16383', 'MIX_LO=-9030']],
+    ['4',
+     ['S1=-1', 'S2=-1', 'U1=0', 'U2=65534'],
+     ['PT_HI=3', 'PT_LO=-1', 'SAT_ADD=-2', 'SAT_SUB=0', 'SP_HI=0', 'SP_LO=0', 'MIX_HI=-1', 'MIX_LO=-9031']],
+  ]
+  foreach c : wide32_misc_global_cases
+    test('sim-wide32_misc_global_' + c[0],
+      find_program('sim_validate.sh'),
+      args : [c167cc_exe.full_path(), meson.source_root() / 'examples' / 'wide32_misc_global.c',
+              'wide32_misc_global'] + c[1] + ['--'] + c[2],
+      workdir : meson.source_root())
+  endforeach
   # Regressão em nível de execução (não só texto pinado) pro bug de
   # 06/09/2026 de "valor vivo através de chamada" - ver
   # tests/call_liveness_runtime_test.sh e examples/call_liveness.c.

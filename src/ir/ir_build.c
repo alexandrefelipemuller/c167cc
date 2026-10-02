@@ -20,6 +20,9 @@ typedef struct {
        vez de tentar mover a struct inteira num vreg (que não existe pra
        isso neste backend). NULL = função atual não devolve struct/union. */
     Symbol *sret_sym;
+    /* > 0 enquanto o rebaixamento de 32 bits (gen_expr32 e cia) está
+       emitindo - marca IrInst.wide32 (ver optimizer.c). */
+    int wide32;
 } Builder;
 
 static void *xalloc(size_t n) { void *p = calloc(1, n); return p; }
@@ -36,6 +39,7 @@ static IrInst *emit(Builder *b, IrOpKind kind) {
     IrInst *i = xalloc(sizeof(IrInst));
     i->kind = kind;
     i->dst = -1; i->a = -1; i->b = -1;
+    i->wide32 = b->wide32 > 0;
     if (!b->fn->head) { b->fn->head = b->fn->tail = i; }
     else { b->fn->tail->next = i; b->fn->tail = i; }
     return i;
@@ -52,7 +56,18 @@ static void gen_stmt(Builder *b, Stmt *s);
 static Type *u16_type(void) { return type_new(TY_U16); }
 static Type *u8_type(void) { return type_new(TY_U8); }
 
-/* Achado 02/09/2026 (projeto irmão Sirius32, comparando código compilado
+/* ver o bloco "Valores de 32 bits como PAR de palavras" mais abaixo */
+static Type *expr_type(Builder *b, Expr *e);
+static int is_wide(Builder *b, Expr *e);
+
+/* ATUALIZAÇÃO 01/10/2026 (BUG-6/7/8/10/11/15 da Sirius32): o texto abaixo
+   descreve o estado ANTERIOR. Expressões de 32 bits agora são avaliadas
+   como par de palavras (ver o bloco "Valores de 32 bits como PAR de
+   palavras" mais abaixo); as formas estreitas daqui continuam sendo
+   tentadas primeiro, só quando os operandos são valores de 16 bits
+   alargados (is_wide() falso), porque nesse caso já davam o código certo.
+
+   Achado 02/09/2026 (projeto irmão Sirius32, comparando código compilado
    contra o binário original de verdade num simulador): este backend NÃO
    tem suporte real a valor de 32 bits em lugar nenhum do pipeline -
    `uint32_t`/`int32_t` só reservam ARMAZENAMENTO de 4 bytes corretamente
@@ -90,6 +105,9 @@ static int try_gen_widening_mul_store_sym(Builder *b, Symbol *dst_sym, Expr *rhs
     if (!dst_sym) return -1;
     if (dst_sym->type->kind != TY_U32 && dst_sym->type->kind != TY_I32) return -1;
     if (rhs->kind != EXPR_BINARY || rhs->op != OP_MUL) return -1;
+    /* operando com palavra alta de verdade: não é 16x16->32, vai pro
+       caminho geral de 32 bits (BUG-11 da Sirius32). */
+    if (is_wide(b, rhs->lhs) || is_wide(b, rhs->rhs)) return -1;
 
     Type *lt, *rt;
     int lv = gen_expr(b, rhs->lhs, &lt);
@@ -156,6 +174,10 @@ static int try_gen_div32_sym(Builder *b, Expr *e, Type **out_type) {
     if (!sym) return -1;
     if (sym->type->kind != TY_U32 && sym->type->kind != TY_I32) return -1;
 
+    /* divisor com palavra alta de verdade: caminho geral (que dá erro de
+       compilação em vez de dividir só pela palavra baixa). */
+    if (is_wide(b, e->rhs)) return -1;
+
     e->lhs->sym = sym;
     Type *rt;
     int rv = gen_expr(b, e->rhs, &rt);
@@ -199,6 +221,9 @@ static int try_gen_compose32_store_sym(Builder *b, Symbol *dst_sym, Expr *rhs, S
     if (match_hi_shl16(rhs->lhs, &hi_expr)) lo_expr = rhs->rhs;
     else if (match_hi_shl16(rhs->rhs, &hi_expr)) lo_expr = rhs->lhs;
     else return -1;
+    /* metade com palavra alta de verdade (ex. `(x32 << 16) | y32`): não é a
+       composição de duas metades de 16 bits, vai pro caminho geral. */
+    if (is_wide(b, hi_expr) || is_wide(b, lo_expr)) return -1;
 
     Type *ht, *lt;
     int hv = gen_expr(b, hi_expr, &ht);
@@ -239,6 +264,7 @@ static int try_gen_div32_mul(Builder *b, Expr *e, Type **out_type) {
     Expr *mul = e->lhs;
     if (mul->kind != EXPR_BINARY || mul->op != OP_MUL) return -1;
     if (!is_cast_to_32(mul->lhs) && !is_cast_to_32(mul->rhs)) return -1;
+    if (is_wide(b, mul->lhs) || is_wide(b, mul->rhs) || is_wide(b, e->rhs)) return -1;
 
     Type *lt, *rt, *dt;
     int lv = gen_expr(b, mul->lhs, &lt);
@@ -547,12 +573,659 @@ static int expr_is_struct_lvalue(Builder *b, Expr *e, Type **out_type) {
     return 0;
 }
 
+/* ======================================================================
+   Valores de 32 bits como PAR de palavras de 16 bits
+   (BUG-6/7/8/10/11/15 da Sirius32, 01/10/2026)
+
+   O IR só tem vregs de 16 bits. Até aqui, 32 bits só funcionavam em 5
+   formas exatas (IR_MUL32_STORE_SYM, IR_SHR32_SYM, IR_DIV32_SYM,
+   IR_COMPOSE32_STORE_SYM, IR_DIV32_MUL); qualquer outra expressão
+   uint32_t/int32_t caía no caminho de 16 bits e perdia a palavra alta em
+   silêncio. Em vez de mais uma forma estreita por bug, toda expressão cujo
+   tipo ESTÁTICO (expr_type) é de 32 bits é agora avaliada por gen_expr32(),
+   que devolve um `Val32`: duas palavras, cada uma um vreg ou uma constante
+   conhecida. As operações de 32 bits viram operações de palavra:
+     +, -        IR_CARRYOP (ADD/SUB na baixa, ADDC/SUBC na alta)
+     *           IR_MULW + IR_MDH (e produtos cruzados se um operando tem
+                 palavra alta de verdade)
+     / %         IR_DIV32 (MDH:MDL + DIVLU/DIVL), divisor de 16 bits
+     & | ^ ~     palavra por palavra
+     << >>       contagem constante, com SHL/SHR/OR de palavra
+     < > <= >= == !=   IR_CMP32
+     constante   as duas palavras (BUG-8)
+     ?:          dois vregs de destino (BUG-10)
+     carga/gravação  as duas palavras do símbolo/da memória
+   Palavra constante conhecida (em geral 0, da extensão de um uint16_t)
+   some do código gerado: `((uint32_t)hi << 16) | lo` não emite nenhuma
+   operação, só dá nome às duas palavras (BUG-15: usado direto como
+   dividendo, vira MDH:MDL + DIVLU).
+
+   As 5 formas antigas continuam sendo tentadas primeiro onde já davam o
+   resultado certo, pra não mudar o assembly do que já funcionava.
+
+   NÃO coberto (continua como era): parâmetro, argumento e retorno de função
+   de 32 bits só carregam a palavra baixa (ABI de 1 registrador por valor);
+   deslocamento de 32 bits por contagem não constante e divisor de mais de
+   16 bits são ERRO de compilação (antes: resultado errado em silêncio).
+   ====================================================================== */
+typedef struct { int v; int is_const; long c; } Word;
+typedef struct {
+    Word lo, hi;
+    int sext; /* a palavra alta é a extensão de sinal da baixa (int16_t alargado) */
+} Val32;
+
+static Word w_reg(int v) { Word w; w.v = v; w.is_const = 0; w.c = 0; return w; }
+static Word w_k(long c) { Word w; w.v = -1; w.is_const = 1; w.c = c & 0xFFFF; return w; }
+static int w_is(Word w, long c) { return w.is_const && w.c == c; }
+
+static int w_vreg(Builder *b, Word w, SrcLoc loc) {
+    if (!w.is_const) return w.v;
+    IrInst *c = emit(b, IR_CONST);
+    c->dst = new_vreg(b); c->imm = w.c; c->size = 2; c->loc = loc;
+    return c->dst;
+}
+
+static Val32 v32_const(long c) {
+    Val32 r;
+    r.lo = w_k(c); r.hi = w_k(c >> 16);
+    r.sext = (r.hi.c == ((r.lo.c & 0x8000) ? 0xFFFF : 0));
+    return r;
+}
+static int v32_is_const(Val32 v) { return v.lo.is_const && v.hi.is_const; }
+static long v32_cval(Val32 v) { return (v.hi.c << 16) | v.lo.c; }
+
+static void err32(SrcLoc loc, const char *msg) {
+    fprintf(stderr, "%s:%d: error: %s\n", loc.file ? loc.file : "?", loc.line, msg);
+    exit(1);
+}
+
+static int ty_is32(const Type *t) {
+    return t && !t->is_array && (t->kind == TY_U32 || t->kind == TY_I32);
+}
+
+static int op_is_cmp(OpKind op) {
+    return op == OP_EQ || op == OP_NE || op == OP_LT || op == OP_GT || op == OP_LE || op == OP_GE;
+}
+
+/* Tipo estático de uma expressão, SEM emitir IR (o resto do builder só
+   descobre o tipo ao gerar o código, via out_type de gen_expr). Só precisa
+   ser exato no que decide "isto é de 32 bits?" e no sinal. */
+static Type *lvalue_type(Builder *b, Expr *e) {
+    switch (e->kind) {
+        case EXPR_IDENT: {
+            Symbol *sym = scope_lookup(b->scope, e->name);
+            return sym ? sym->type : u16_type();
+        }
+        case EXPR_DEREF: {
+            Type *pt = expr_type(b, e->rhs);
+            return pt->pointee ? pt->pointee : u16_type();
+        }
+        case EXPR_INDEX: {
+            if (e->base->kind == EXPR_IDENT) {
+                Symbol *sym = scope_lookup(b->scope, e->base->name);
+                if (sym && !sym->type->is_array && sym->type->kind >= TY_I8 && sym->type->kind <= TY_U32)
+                    return sym->type;
+            }
+            Type *bt = expr_type(b, e->base);
+            return bt->pointee ? bt->pointee : u16_type();
+        }
+        case EXPR_MEMBER: {
+            Type *bt = lvalue_type(b, e->base);
+            if (bt->kind != TY_STRUCT || bt->is_array) return u16_type();
+            const StructField *f = struct_def_find_field(bt->struct_def, e->name);
+            return f ? f->type : u16_type();
+        }
+        default:
+            return expr_type(b, e);
+    }
+}
+
+static Type *expr_type(Builder *b, Expr *e) {
+    switch (e->kind) {
+        case EXPR_INT_LIT:
+            if (e->ival > 0x7FFFFFFFL) return type_new(TY_U32);
+            if (e->ival > 0xFFFF || e->ival < -0x8000L) return type_new(TY_I32);
+            return u16_type();
+        case EXPR_IDENT: case EXPR_MEMBER: case EXPR_INDEX: case EXPR_DEREF: {
+            Type *t = lvalue_type(b, e);
+            if (t->is_array) return type_new_ptr(t->pointee);
+            if (t->kind == TY_FUNC) return type_new_ptr(t);
+            return t;
+        }
+        case EXPR_CAST: return e->cast_type;
+        case EXPR_ADDR: return type_new_ptr(lvalue_type(b, e->rhs));
+        case EXPR_UNARY: return e->op == OP_NOT ? u16_type() : expr_type(b, e->rhs);
+        case EXPR_BINARY: {
+            if (e->op == OP_LAND || e->op == OP_LOR || op_is_cmp(e->op)) return u16_type();
+            Type *lt = expr_type(b, e->lhs);
+            if (e->op == OP_SHL || e->op == OP_SHR) return lt;
+            Type *rt = expr_type(b, e->rhs);
+            if (lt->kind == TY_PTR && rt->kind == TY_PTR) return e->op == OP_SUB ? u16_type() : lt;
+            if (lt->kind == TY_PTR) return lt;
+            if (rt->kind == TY_PTR) return rt;
+            if (ty_is32(lt) && ty_is32(rt)) return (lt->kind == TY_U32) ? lt : rt;
+            return type_bytes(lt) >= type_bytes(rt) ? lt : rt;
+        }
+        case EXPR_ASSIGN:
+        case EXPR_POSTINC: case EXPR_POSTDEC: case EXPR_PREINC: case EXPR_PREDEC:
+            return lvalue_type(b, e->lhs);
+        case EXPR_TERNARY: {
+            Type *tt = expr_type(b, e->then_e), *et = expr_type(b, e->else_e);
+            if (ty_is32(tt) && ty_is32(et)) return (tt->kind == TY_U32) ? tt : et;
+            if (ty_is32(et) && !ty_is32(tt)) return et;
+            return tt;
+        }
+        case EXPR_CALL: {
+            Expr *callee = e->callee;
+            if (callee->kind == EXPR_IDENT && e->nargs == 2) {
+                if (strcmp(callee->name, "c167cc_far_read16") == 0) return u16_type();
+                if (strcmp(callee->name, "c167cc_far_read8") == 0) return u8_type();
+            }
+            while (callee->kind == EXPR_DEREF) callee = callee->rhs;
+            Symbol *fsym = (callee->kind == EXPR_IDENT) ? scope_lookup(b->scope, callee->name) : NULL;
+            if (fsym && fsym->kind == SYM_FUNC) return fsym->func ? fsym->func->ret_type : u16_type();
+            Type *ct = expr_type(b, callee);
+            if (ct->kind == TY_PTR && ct->pointee && ct->pointee->kind == TY_FUNC && ct->pointee->func_ret)
+                return ct->pointee->func_ret;
+            return u16_type();
+        }
+        default:
+            return u16_type();
+    }
+}
+
+/* Constante inteira conhecida em tempo de compilação (literal, -literal,
+   ~literal, cast de constante). */
+static int const_eval(Expr *e, long *out) {
+    long v;
+    switch (e->kind) {
+        case EXPR_INT_LIT: *out = e->ival; return 1;
+        case EXPR_UNARY:
+            if ((e->op != OP_NEG && e->op != OP_BNOT) || !const_eval(e->rhs, &v)) return 0;
+            /* valor matemático exato (o literal é tratado como inteiro com
+               sinal de 32 bits, como no GCC usado pra referência na
+               Sirius32): -32768 e -0x8000 são 0xFFFF8000 em 32 bits. */
+            *out = (e->op == OP_NEG) ? -v : ~v;
+            return 1;
+        case EXPR_CAST:
+            if (e->cast_type->is_array || !const_eval(e->rhs, &v)) return 0;
+            switch (e->cast_type->kind) {
+                case TY_U32: v &= 0xFFFFFFFFL; break;
+                case TY_I32: v &= 0xFFFFFFFFL; if (v & 0x80000000L) v -= 0x100000000L; break;
+                case TY_U16: v &= 0xFFFFL; break;
+                case TY_I16: v &= 0xFFFFL; if (v & 0x8000L) v -= 0x10000L; break;
+                case TY_U8: v &= 0xFFL; break;
+                case TY_I8: v &= 0xFFL; if (v & 0x80L) v -= 0x100L; break;
+                default: return 0;
+            }
+            *out = v;
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* "Largo de verdade": a expressão é de 32 bits e a palavra alta pode não
+   ser só a extensão de um valor de 16 bits. `(uint32_t)x16` e constante
+   pequena NÃO são largos - as formas estreitas antigas (que só olham a
+   palavra baixa dos operandos) continuam certas pra eles. */
+static int is_wide(Builder *b, Expr *e) {
+    long c;
+    if (const_eval(e, &c)) return c > 0xFFFFL || c < -0x8000L;
+    if (!ty_is32(expr_type(b, e))) return 0;
+    if (e->kind == EXPR_CAST) return is_wide(b, e->rhs);
+    return 1;
+}
+
+static Word w_sext(Builder *b, Word w, SrcLoc loc) {
+    if (w.is_const) return w_k((w.c & 0x8000) ? 0xFFFF : 0);
+    IrInst *s = emit(b, IR_SEXT16);
+    s->dst = new_vreg(b); s->a = w.v; s->size = 2; s->loc = loc;
+    return w_reg(s->dst);
+}
+
+/* Alarga um valor de 16 bits (1 vreg) pra 32: extensão de sinal se o tipo
+   de origem tem sinal, zero se não tem. */
+static Val32 widen16(Builder *b, int v, Type *t, SrcLoc loc) {
+    Val32 r;
+    r.lo = w_reg(v);
+    if (type_is_signed(t)) { r.hi = w_sext(b, r.lo, loc); r.sext = 1; }
+    else { r.hi = w_k(0); r.sext = 0; }
+    return r;
+}
+
+/* Operação de PALAVRA (16 bits), com dobra de constante (mascarada em 16
+   bits) e identidades com 0/0xFFFF - é isso que faz a palavra alta zero de
+   um uint16_t alargado não gerar código. Deslocamento: contagem constante
+   em [0,15] (o SHL/SHR do C166 só usa 4 bits da contagem). */
+static Word w_binop(Builder *b, OpKind op, Word x, Word y, int is_signed, SrcLoc loc) {
+    if (x.is_const && y.is_const) {
+        long a = x.c, c = y.c, r = 0;
+        switch (op) {
+            case OP_ADD: r = a + c; break;
+            case OP_SUB: r = a - c; break;
+            case OP_MUL: r = a * c; break;
+            case OP_AND: r = a & c; break;
+            case OP_OR:  r = a | c; break;
+            case OP_XOR: r = a ^ c; break;
+            case OP_SHL: r = a << c; break;
+            case OP_SHR:
+                if (is_signed && (a & 0x8000)) a -= 0x10000L;
+                r = a >> c; break;
+            case OP_DIV: r = c ? a / c : 0; break;
+            case OP_MOD: r = c ? a % c : 0; break;
+            default: break;
+        }
+        return w_k(r);
+    }
+    switch (op) {
+        case OP_ADD: case OP_OR: case OP_XOR:
+            if (w_is(x, 0)) return y;
+            if (w_is(y, 0)) return x;
+            break;
+        case OP_SUB:
+            if (w_is(y, 0)) return x;
+            break;
+        case OP_AND:
+            if (w_is(x, 0) || w_is(y, 0)) return w_k(0);
+            if (w_is(x, 0xFFFF)) return y;
+            if (w_is(y, 0xFFFF)) return x;
+            break;
+        case OP_MUL:
+            if (w_is(x, 0) || w_is(y, 0)) return w_k(0);
+            if (w_is(x, 1)) return y;
+            if (w_is(y, 1)) return x;
+            break;
+        case OP_SHL: case OP_SHR:
+            if (w_is(y, 0)) return x;
+            if (w_is(x, 0)) return x;
+            break;
+        default: break;
+    }
+    int xv = w_vreg(b, x, loc), yv = w_vreg(b, y, loc);
+    IrInst *i = emit(b, IR_BINOP);
+    i->dst = new_vreg(b); i->op = op; i->a = xv; i->b = yv;
+    i->size = 2; i->is_signed = is_signed; i->loc = loc;
+    return w_reg(i->dst);
+}
+
+static Val32 v32_addsub(Builder *b, OpKind op, Val32 x, Val32 y, SrcLoc loc) {
+    Val32 r;
+    if (v32_is_const(x) && v32_is_const(y))
+        return v32_const(op == OP_ADD ? v32_cval(x) + v32_cval(y) : v32_cval(x) - v32_cval(y));
+    r.sext = 0;
+    if (w_is(y.lo, 0) || (op == OP_ADD && w_is(x.lo, 0))) {
+        /* uma das palavras baixas é 0: não há vai-um, a alta é uma operação
+           de 16 bits comum. */
+        r.lo = w_binop(b, op, x.lo, y.lo, 0, loc);
+        r.hi = w_binop(b, op, x.hi, y.hi, 0, loc);
+        return r;
+    }
+    /* os 4 operandos são materializados ANTES do par ADD/ADDC: nada pode
+       ficar entre as duas instruções além de MOV (ver IR_CARRYOP). */
+    int xl = w_vreg(b, x.lo, loc), yl = w_vreg(b, y.lo, loc);
+    int xh = w_vreg(b, x.hi, loc), yh = w_vreg(b, y.hi, loc);
+    IrInst *lo = emit(b, IR_CARRYOP);
+    lo->dst = new_vreg(b); lo->op = op; lo->a = xl; lo->b = yl; lo->imm = 0; lo->size = 2; lo->loc = loc;
+    IrInst *hi = emit(b, IR_CARRYOP);
+    hi->dst = new_vreg(b); hi->op = op; hi->a = xh; hi->b = yh; hi->imm = 1; hi->size = 2; hi->loc = loc;
+    r.lo = w_reg(lo->dst); r.hi = w_reg(hi->dst);
+    return r;
+}
+
+static Val32 v32_bitop(Builder *b, OpKind op, Val32 x, Val32 y, SrcLoc loc) {
+    Val32 r;
+    r.lo = w_binop(b, op, x.lo, y.lo, 0, loc);
+    r.hi = w_binop(b, op, x.hi, y.hi, 0, loc);
+    r.sext = 0;
+    return r;
+}
+
+static Val32 v32_mul(Builder *b, Val32 x, Val32 y, SrcLoc loc) {
+    Val32 r;
+    if (v32_is_const(x) && v32_is_const(y))
+        return v32_const((long)(((unsigned long)v32_cval(x) * (unsigned long)v32_cval(y)) & 0xFFFFFFFFUL));
+    r.sext = 0;
+    int zx = w_is(x.hi, 0), zy = w_is(y.hi, 0);
+    int xl = w_vreg(b, x.lo, loc), yl = w_vreg(b, y.lo, loc);
+    IrInst *m = emit(b, IR_MULW);
+    m->dst = new_vreg(b); m->a = xl; m->b = yl; m->size = 2; m->loc = loc;
+    /* 16x16->32 direto quando os dois operandos são valores de 16 bits
+       alargados: MULU se os dois foram estendidos com zero, MUL se os dois
+       foram estendidos com sinal. */
+    m->is_signed = (!(zx && zy) && x.sext && y.sext);
+    IrInst *h = emit(b, IR_MDH);
+    h->dst = new_vreg(b); h->size = 2; h->loc = loc;
+    r.lo = w_reg(m->dst); r.hi = w_reg(h->dst);
+    if ((zx && zy) || m->is_signed) return r;
+    /* caso geral (módulo 2^32): hi += lo(x.lo * y.hi) + lo(x.hi * y.lo) */
+    Word c1 = w_binop(b, OP_MUL, w_reg(xl), y.hi, 0, loc);
+    Word c2 = w_binop(b, OP_MUL, x.hi, w_reg(yl), 0, loc);
+    r.hi = w_binop(b, OP_ADD, r.hi, c1, 0, loc);
+    r.hi = w_binop(b, OP_ADD, r.hi, c2, 0, loc);
+    return r;
+}
+
+/* Deslocamento de palavra por contagem constante k em [0,15]. */
+static Word w_shift(Builder *b, OpKind op, Word w, long k, int is_signed, SrcLoc loc) {
+    return w_binop(b, op, w, w_k(k), is_signed, loc);
+}
+
+static Val32 v32_shift(Builder *b, OpKind op, Val32 x, long n, int is_signed, SrcLoc loc) {
+    Val32 r;
+    r.sext = 0;
+    if (n < 0 || n > 31) err32(loc, "32-bit shift count out of range (0..31)");
+    if (n == 0) return x;
+    if (op == OP_SHL) {
+        if (n >= 16) {
+            r.hi = w_shift(b, OP_SHL, x.lo, n - 16, 0, loc);
+            r.lo = w_k(0);
+        } else {
+            Word carry = w_shift(b, OP_SHR, x.lo, 16 - n, 0, loc);
+            r.hi = w_binop(b, OP_OR, w_shift(b, OP_SHL, x.hi, n, 0, loc), carry, 0, loc);
+            r.lo = w_shift(b, OP_SHL, x.lo, n, 0, loc);
+        }
+    } else {
+        if (n >= 16) {
+            r.lo = w_shift(b, OP_SHR, x.hi, n - 16, is_signed, loc);
+            r.hi = is_signed ? w_sext(b, x.hi, loc) : w_k(0);
+        } else {
+            Word carry = w_shift(b, OP_SHL, x.hi, 16 - n, 0, loc);
+            r.lo = w_binop(b, OP_OR, w_shift(b, OP_SHR, x.lo, n, 0, loc), carry, 0, loc);
+            r.hi = w_shift(b, OP_SHR, x.hi, n, is_signed, loc);
+        }
+    }
+    return r;
+}
+
+/* n / d ou n % d com dividendo de 32 bits. O C167 só divide 32 por 16
+   (DIVLU/DIVL): o divisor tem que caber em 16 bits e o quociente sai com 16
+   bits (palavra alta do resultado = 0, ou extensão de sinal em int32_t) -
+   BUG-7. Estouro do quociente não é detectado (como no hardware: flag V). */
+static Val32 v32_div(Builder *b, OpKind op, Val32 n, Val32 d, int is_signed, SrcLoc loc) {
+    Val32 r;
+    if (!(w_is(d.hi, 0) || (is_signed && d.sext)))
+        err32(loc, "division by a 32-bit divisor is not supported (the C167 only divides 32 by 16 bits; "
+                   "cast the divisor to uint16_t/int16_t if it fits)");
+    if (!is_signed && w_is(n.hi, 0)) {
+        r.lo = w_binop(b, op, n.lo, d.lo, 0, loc);
+        r.hi = w_k(0); r.sext = 0;
+        return r;
+    }
+    int dv = w_vreg(b, d.lo, loc);
+    int nl = w_vreg(b, n.lo, loc), nh = w_vreg(b, n.hi, loc);
+    IrInst *i = emit(b, IR_DIV32);
+    i->dst = new_vreg(b); i->a = nl; i->b = nh;
+    i->args = xalloc(sizeof(int)); i->args[0] = dv; i->nargs = 1;
+    i->op = op; i->is_signed = is_signed; i->size = 2; i->loc = loc;
+    r.lo = w_reg(i->dst);
+    if (is_signed) { r.hi = w_sext(b, r.lo, loc); r.sext = 1; }
+    else { r.hi = w_k(0); r.sext = 0; }
+    return r;
+}
+
+static Val32 gen_expr32(Builder *b, Expr *e);
+
+/* x op <rhs_e>, com x já avaliado. Deslocamento exige contagem constante. */
+static Val32 v32_apply(Builder *b, OpKind op, Val32 x, Expr *rhs_e, int is_signed, SrcLoc loc) {
+    if (op == OP_SHL || op == OP_SHR) {
+        long n;
+        if (!const_eval(rhs_e, &n))
+            err32(loc, "32-bit shift by a non-constant count is not supported");
+        return v32_shift(b, op, x, n, is_signed, loc);
+    }
+    Val32 y = gen_expr32(b, rhs_e);
+    switch (op) {
+        case OP_ADD: case OP_SUB: return v32_addsub(b, op, x, y, loc);
+        case OP_AND: case OP_OR: case OP_XOR: return v32_bitop(b, op, x, y, loc);
+        case OP_MUL: return v32_mul(b, x, y, loc);
+        case OP_DIV: case OP_MOD: return v32_div(b, op, x, y, is_signed, loc);
+        default: break;
+    }
+    err32(loc, "internal error: unsupported 32-bit operator");
+    return x;
+}
+
+/* Carga das duas palavras de um lvalue de 32 bits. */
+static Val32 load32(Builder *b, Expr *e) {
+    Val32 r;
+    r.sext = 0;
+    if (e->kind == EXPR_IDENT) {
+        Symbol *sym = scope_lookup(b->scope, e->name);
+        if (!sym) { fprintf(stderr, "%s:%d: error: undeclared identifier '%s'\n", e->loc.file, e->loc.line, e->name); exit(1); }
+        e->sym = sym;
+        for (int k = 0; k < 2; k++) {
+            IrInst *i = emit(b, IR_LOAD_SYM);
+            i->dst = new_vreg(b); i->sym = sym; i->imm = k * 2;
+            i->size = k ? 2 : type_bytes(sym->type);
+            i->is_signed = type_is_signed(sym->type); i->loc = e->loc;
+            if (k) r.hi = w_reg(i->dst); else r.lo = w_reg(i->dst);
+        }
+        return r;
+    }
+    Type *elemty;
+    int addr = gen_lvalue_addr(b, e, &elemty);
+    IrInst *lo = emit(b, IR_LOAD_MEM);
+    lo->dst = new_vreg(b); lo->a = addr; lo->size = 2; lo->loc = e->loc;
+    int addr2 = add_const_offset(b, addr, 2, e->loc);
+    IrInst *hi = emit(b, IR_LOAD_MEM);
+    hi->dst = new_vreg(b); hi->a = addr2; hi->size = 2; hi->loc = e->loc;
+    r.lo = w_reg(lo->dst); r.hi = w_reg(hi->dst);
+    return r;
+}
+
+static void store32_sym(Builder *b, Symbol *sym, Val32 v, SrcLoc loc) {
+    int lo = w_vreg(b, v.lo, loc), hi = w_vreg(b, v.hi, loc);
+    IrInst *s0 = emit(b, IR_STORE_SYM);
+    s0->sym = sym; s0->a = lo; s0->size = type_bytes(sym->type); s0->loc = loc;
+    IrInst *s1 = emit(b, IR_STORE_SYM);
+    s1->sym = sym; s1->a = hi; s1->imm = 2; s1->size = 2; s1->loc = loc;
+}
+
+/* Gravação das duas palavras num lvalue de 32 bits. */
+static void store32(Builder *b, Expr *lhs, Val32 v) {
+    if (lhs->kind == EXPR_IDENT) {
+        Symbol *sym = scope_lookup(b->scope, lhs->name);
+        if (!sym) { fprintf(stderr, "%s:%d: error: undeclared identifier '%s'\n", lhs->loc.file, lhs->loc.line, lhs->name); exit(1); }
+        lhs->sym = sym;
+        store32_sym(b, sym, v, lhs->loc);
+        return;
+    }
+    int lo = w_vreg(b, v.lo, lhs->loc), hi = w_vreg(b, v.hi, lhs->loc);
+    Type *elemty;
+    int addr = gen_lvalue_addr(b, lhs, &elemty);
+    IrInst *s0 = emit(b, IR_STORE_MEM);
+    s0->a = addr; s0->b = lo; s0->size = 2; s0->loc = lhs->loc;
+    int addr2 = add_const_offset(b, addr, 2, lhs->loc);
+    IrInst *s1 = emit(b, IR_STORE_MEM);
+    s1->a = addr2; s1->b = hi; s1->size = 2; s1->loc = lhs->loc;
+}
+
+static int gen_cond(Builder *b, Expr *e);
+
+static Val32 gen_expr32_inner(Builder *b, Expr *e) {
+    long cv;
+    if (const_eval(e, &cv)) return v32_const(cv); /* BUG-8: as duas palavras */
+
+    Type *t = expr_type(b, e);
+    if (ty_is32(t)) {
+        int is_signed = type_is_signed(t);
+        switch (e->kind) {
+            case EXPR_IDENT: case EXPR_MEMBER: case EXPR_INDEX: case EXPR_DEREF:
+                return load32(b, e);
+            case EXPR_CAST: {
+                if (ty_is32(expr_type(b, e->rhs))) return gen_expr32(b, e->rhs);
+                Type *st;
+                int v = gen_expr(b, e->rhs, &st);
+                return widen16(b, v, st, e->loc);
+            }
+            case EXPR_UNARY: {
+                Val32 x = gen_expr32(b, e->rhs);
+                if (e->op == OP_NEG) return v32_addsub(b, OP_SUB, v32_const(0), x, e->loc);
+                if (e->op == OP_BNOT) {
+                    Val32 r; r.sext = 0;
+                    Word *src[2] = { &x.lo, &x.hi }, *dst[2] = { &r.lo, &r.hi };
+                    for (int k = 0; k < 2; k++) {
+                        if (src[k]->is_const) { *dst[k] = w_k(~src[k]->c); continue; }
+                        IrInst *u = emit(b, IR_UNOP);
+                        u->dst = new_vreg(b); u->op = OP_BNOT; u->a = src[k]->v; u->size = 2; u->loc = e->loc;
+                        *dst[k] = w_reg(u->dst);
+                    }
+                    return r;
+                }
+                break;
+            }
+            case EXPR_BINARY: {
+                if (e->op == OP_LAND || e->op == OP_LOR || op_is_cmp(e->op)) break;
+                Type *ot;
+                /* As formas antigas `sym32 >> N` e `sym32 / x`, `(a*b) / x`
+                   já calculam a palavra baixa certa: reaproveita (mesmo
+                   assembly de antes) e só acrescenta a palavra alta. */
+                if (e->op == OP_SHR && e->rhs->kind == EXPR_INT_LIT && e->rhs->ival >= 1 && e->rhs->ival <= 31) {
+                    int lo = try_gen_shr32_sym(b, e, &ot);
+                    if (lo >= 0) {
+                        Val32 r; r.sext = 0;
+                        long n = e->rhs->ival;
+                        r.lo = w_reg(lo);
+                        if (n >= 16 && !is_signed) { r.hi = w_k(0); return r; }
+                        IrInst *h = emit(b, IR_LOAD_SYM);
+                        h->dst = new_vreg(b); h->sym = e->lhs->sym; h->imm = 2; h->size = 2; h->loc = e->loc;
+                        if (n >= 16) r.hi = w_sext(b, w_reg(h->dst), e->loc);
+                        else r.hi = w_shift(b, OP_SHR, w_reg(h->dst), n, is_signed, e->loc);
+                        return r;
+                    }
+                }
+                if (e->op == OP_DIV || e->op == OP_MOD) {
+                    int q = try_gen_div32_sym(b, e, &ot);
+                    if (q < 0) q = try_gen_div32_mul(b, e, &ot);
+                    if (q >= 0) {
+                        /* BUG-7: o quociente/resto do DIVLU tem 16 bits; a
+                           palavra alta do resultado de 32 bits é 0. */
+                        Val32 r;
+                        r.lo = w_reg(q);
+                        if (is_signed) { r.hi = w_sext(b, r.lo, e->loc); r.sext = 1; }
+                        else { r.hi = w_k(0); r.sext = 0; }
+                        return r;
+                    }
+                }
+                Val32 x = gen_expr32(b, e->lhs);
+                return v32_apply(b, e->op, x, e->rhs, is_signed, e->loc);
+            }
+            case EXPR_ASSIGN: {
+                Val32 v;
+                if (e->op == OP_ASSIGN) {
+                    v = gen_expr32(b, e->rhs);
+                } else {
+                    Val32 x = load32(b, e->lhs);
+                    v = v32_apply(b, e->op, x, e->rhs, is_signed, e->loc);
+                }
+                store32(b, e->lhs, v);
+                return v;
+            }
+            case EXPR_POSTINC: case EXPR_POSTDEC: case EXPR_PREINC: case EXPR_PREDEC: {
+                Val32 x = load32(b, e->lhs);
+                int inc = (e->kind == EXPR_POSTINC || e->kind == EXPR_PREINC);
+                Val32 v = v32_addsub(b, inc ? OP_ADD : OP_SUB, x, v32_const(1), e->loc);
+                store32(b, e->lhs, v);
+                return (e->kind == EXPR_POSTINC || e->kind == EXPR_POSTDEC) ? x : v;
+            }
+            case EXPR_TERNARY: {
+                /* BUG-10: dois vregs de destino, um por palavra. */
+                char *l_true = fmt_label(b, "tern_true");
+                char *l_false = fmt_label(b, "tern_false");
+                char *l_end = fmt_label(b, "tern_end");
+                int cv2 = gen_cond(b, e->cond);
+                IrInst *cj = emit(b, IR_CJMP); cj->a = cv2; cj->true_label = strdup(l_true); cj->false_label = strdup(l_false);
+                int dlo = new_vreg(b), dhi = new_vreg(b);
+                Expr *arms[2] = { e->then_e, e->else_e };
+                for (int k = 0; k < 2; k++) {
+                    emit(b, IR_LABEL)->label = strdup(k ? l_false : l_true);
+                    Val32 v = gen_expr32(b, arms[k]);
+                    int lo = w_vreg(b, v.lo, e->loc), hi = w_vreg(b, v.hi, e->loc);
+                    IrInst *m1 = emit(b, IR_MOV); m1->dst = dlo; m1->a = lo; m1->size = 2;
+                    IrInst *m2 = emit(b, IR_MOV); m2->dst = dhi; m2->a = hi; m2->size = 2;
+                    if (k == 0) emit(b, IR_JMP)->label = strdup(l_end);
+                }
+                emit(b, IR_LABEL)->label = strdup(l_end);
+                Val32 r; r.lo = w_reg(dlo); r.hi = w_reg(dhi); r.sext = 0;
+                return r;
+            }
+            default:
+                break;
+        }
+    }
+    /* valor de 16 bits (ou chamada de função: a ABI só devolve a palavra
+       baixa): 1 vreg, alargado conforme o sinal do tipo. */
+    Type *ot;
+    int v = gen_expr(b, e, &ot);
+    return widen16(b, v, ot, e->loc);
+}
+
+static Val32 gen_expr32(Builder *b, Expr *e) {
+    b->wide32++;
+    Val32 r = gen_expr32_inner(b, e);
+    b->wide32--;
+    return r;
+}
+
+/* Comparação em que pelo menos um operando é de 32 bits (BUG-11). */
+static int gen_cmp32(Builder *b, Expr *e) {
+    b->wide32++;
+    Type *lt = expr_type(b, e->lhs), *rt = expr_type(b, e->rhs);
+    /* conversões aritméticas usuais do C: uint32_t ganha; senão int32_t
+       (com sinal) representa qualquer operando menor. */
+    int is_signed = !((ty_is32(lt) && lt->kind == TY_U32) || (ty_is32(rt) && rt->kind == TY_U32));
+    Val32 x = gen_expr32(b, e->lhs);
+    Val32 y = gen_expr32(b, e->rhs);
+    OpKind op = e->op;
+    if (op == OP_GT || op == OP_LE) { Val32 t = x; x = y; y = t; op = (op == OP_GT) ? OP_LT : OP_GE; }
+    int dst;
+    if (w_is(x.hi, 0) && w_is(y.hi, 0)) {
+        /* as duas palavras altas são 0: comparação de 16 bits sem sinal */
+        int xv = w_vreg(b, x.lo, e->loc), yv = w_vreg(b, y.lo, e->loc);
+        IrInst *i = emit(b, IR_BINOP);
+        i->dst = new_vreg(b); i->op = op; i->a = xv; i->b = yv; i->size = 2; i->is_signed = 0; i->loc = e->loc;
+        dst = i->dst;
+    } else {
+        int xl = w_vreg(b, x.lo, e->loc), yl = w_vreg(b, y.lo, e->loc);
+        int xh = w_vreg(b, x.hi, e->loc), yh = w_vreg(b, y.hi, e->loc);
+        IrInst *i = emit(b, IR_CMP32);
+        i->dst = new_vreg(b); i->op = op; i->a = xl; i->b = yl;
+        i->args = xalloc(sizeof(int) * 2); i->args[0] = xh; i->args[1] = yh; i->nargs = 2;
+        i->size = 2; i->is_signed = is_signed; i->loc = e->loc;
+        dst = i->dst;
+    }
+    b->wide32--;
+    return dst;
+}
+
+/* Valor de uma condição (if/while/for/?:/&&/||/!): 1 vreg que é != 0 se e
+   só se a expressão é != 0. Em 32 bits é o OR das duas palavras - antes só
+   a palavra baixa era testada. */
+static int gen_cond(Builder *b, Expr *e) {
+    Type *t;
+    if (!ty_is32(expr_type(b, e))) return gen_expr(b, e, &t);
+    b->wide32++;
+    Val32 v = gen_expr32(b, e);
+    int r = w_vreg(b, w_binop(b, OP_OR, v.lo, v.hi, 0, e->loc), e->loc);
+    b->wide32--;
+    return r;
+}
+
 static int gen_expr(Builder *b, Expr *e, Type **out_type) {
     switch (e->kind) {
         case EXPR_INT_LIT: {
             IrInst *i = emit(b, IR_CONST);
             i->dst = new_vreg(b); i->imm = e->ival; i->size = 2; i->loc = e->loc;
             *out_type = u16_type();
+            if (e->ival > 0xFFFF || e->ival < -0x8000L) {
+                /* BUG-8 da Sirius32: literal de 32 bits num contexto de 1
+                   vreg - só a palavra baixa cabe aqui (o valor inteiro sai
+                   por gen_expr32); antes ia o valor inteiro num imediato
+                   de 16 bits. */
+                i->imm = e->ival & 0xFFFF;
+                *out_type = expr_type(b, e);
+            }
             return i->dst;
         }
         case EXPR_IDENT:
@@ -635,7 +1308,13 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
         }
         case EXPR_UNARY: {
             Type *t;
-            int v = gen_expr(b, e->rhs, &t);
+            int v;
+            if (e->op == OP_NOT && ty_is32(expr_type(b, e->rhs))) {
+                /* !x32: testa as duas palavras */
+                v = gen_cond(b, e->rhs); t = u16_type();
+            } else {
+                v = gen_expr(b, e->rhs, &t);
+            }
             IrInst *i = emit(b, IR_UNOP);
             i->dst = new_vreg(b); i->op = e->op; i->a = v;
             i->size = type_bytes(t); i->is_signed = type_is_signed(t); i->loc = e->loc;
@@ -655,15 +1334,13 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
                 char *l_true = fmt_label(b, "logic_true");
                 char *l_false = fmt_label(b, "logic_false");
                 char *l_end = fmt_label(b, "logic_end");
-                Type *lt;
-                int lv = gen_expr(b, e->lhs, &lt);
+                int lv = gen_cond(b, e->lhs);
                 IrInst *cj = emit(b, IR_CJMP);
                 cj->a = lv;
                 if (e->op == OP_LAND) { cj->true_label = strdup(l_rhs); cj->false_label = strdup(l_false); }
                 else { cj->true_label = strdup(l_true); cj->false_label = strdup(l_rhs); }
                 emit(b, IR_LABEL)->label = strdup(l_rhs);
-                Type *rt;
-                int rv = gen_expr(b, e->rhs, &rt);
+                int rv = gen_cond(b, e->rhs);
                 IrInst *cjr = emit(b, IR_CJMP);
                 cjr->a = rv; cjr->true_label = strdup(l_true); cjr->false_label = strdup(l_false);
                 int dst = new_vreg(b);
@@ -675,6 +1352,22 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
                 emit(b, IR_LABEL)->label = strdup(l_end);
                 *out_type = u16_type();
                 return dst;
+            }
+            /* 32 bits (BUG-6/11/15 da Sirius32): comparação com operando de
+               32 bits e aritmética de tipo 32 bits vão pelo par de
+               palavras; aqui (contexto de 1 vreg) fica a palavra baixa. */
+            if (op_is_cmp(e->op)) {
+                if (ty_is32(expr_type(b, e->lhs)) || ty_is32(expr_type(b, e->rhs))) {
+                    *out_type = u16_type();
+                    return gen_cmp32(b, e);
+                }
+            } else {
+                Type *st = expr_type(b, e);
+                if (ty_is32(st)) {
+                    Val32 v = gen_expr32(b, e);
+                    *out_type = st;
+                    return w_vreg(b, v.lo, e->loc);
+                }
             }
             Type *lt, *rt;
             int lv = gen_expr(b, e->lhs, &lt);
@@ -803,6 +1496,17 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
                     }
                 }
             }
+            {
+                /* destino de 32 bits (BUG-11 da Sirius32): grava as duas
+                   palavras; o lado direito é avaliado em 32 bits (ou
+                   alargado). */
+                Type *dt = lvalue_type(b, e->lhs);
+                if (ty_is32(dt)) {
+                    Val32 v = gen_expr32(b, e);
+                    *out_type = dt;
+                    return w_vreg(b, v.lo, e->loc);
+                }
+            }
             Type *rt;
             int rv = gen_expr(b, e->rhs, &rt);
             if (e->op != OP_ASSIGN) {
@@ -821,8 +1525,7 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
             char *l_true = fmt_label(b, "tern_true");
             char *l_false = fmt_label(b, "tern_false");
             char *l_end = fmt_label(b, "tern_end");
-            Type *ct;
-            int cv = gen_expr(b, e->cond, &ct);
+            int cv = gen_cond(b, e->cond);
             IrInst *cj = emit(b, IR_CJMP); cj->a = cv; cj->true_label = strdup(l_true); cj->false_label = strdup(l_false);
             int dst = new_vreg(b);
             emit(b, IR_LABEL)->label = strdup(l_true);
@@ -912,6 +1615,11 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
         }
         case EXPR_POSTINC: case EXPR_POSTDEC:
         case EXPR_PREINC: case EXPR_PREDEC: {
+            if (ty_is32(lvalue_type(b, e->lhs))) {
+                Val32 v = gen_expr32(b, e);
+                *out_type = lvalue_type(b, e->lhs);
+                return w_vreg(b, v.lo, e->loc);
+            }
             Type *lt;
             int lv = gen_load_lvalue(b, e->lhs, &lt);
             IrInst *c = emit(b, IR_CONST); c->dst = new_vreg(b); c->imm = 1; c->size = 2;
@@ -959,6 +1667,13 @@ static void gen_stmt(Builder *b, Stmt *s) {
                 } else if (try_gen_compose32_store_sym(b, sym, s->decl->init, s->loc) >= 0) {
                     /* `uint32_t x = ((uint32_t)hi << 16) | lo;` - ver
                        comentário de try_gen_compose32_store_sym acima. */
+                } else if (ty_is32(sym->type)) {
+                    /* `uint32_t x = <expr>;` (BUG-6/7/8/10/11 da Sirius32):
+                       as duas palavras. */
+                    b->wide32++;
+                    Val32 v = gen_expr32(b, s->decl->init);
+                    store32_sym(b, sym, v, s->loc);
+                    b->wide32--;
                 } else {
                     Type *t;
                     int v = gen_expr(b, s->decl->init, &t);
@@ -1004,7 +1719,7 @@ static void gen_stmt(Builder *b, Stmt *s) {
             char *l_then = fmt_label(b, "if_then");
             char *l_else = fmt_label(b, "if_else");
             char *l_end = fmt_label(b, "if_end");
-            Type *ct; int cv = gen_expr(b, s->cond, &ct);
+            int cv = gen_cond(b, s->cond);
             IrInst *cj = emit(b, IR_CJMP);
             cj->a = cv; cj->loc = s->loc;
             cj->true_label = strdup(l_then);
@@ -1024,7 +1739,7 @@ static void gen_stmt(Builder *b, Stmt *s) {
             char *l_body = fmt_label(b, "while_body");
             char *l_end = fmt_label(b, "while_end");
             emit(b, IR_LABEL)->label = strdup(l_cond);
-            Type *ct; int cv = gen_expr(b, s->cond, &ct);
+            int cv = gen_cond(b, s->cond);
             IrInst *cj = emit(b, IR_CJMP); cj->a = cv; cj->true_label = strdup(l_body); cj->false_label = strdup(l_end);
             emit(b, IR_LABEL)->label = strdup(l_body);
             char *ob = b->break_label, *oc = b->continue_label;
@@ -1064,7 +1779,7 @@ static void gen_stmt(Builder *b, Stmt *s) {
             char *l_end = fmt_label(b, "for_end");
             emit(b, IR_LABEL)->label = strdup(l_cond);
             if (s->for_cond) {
-                Type *ct; int cv = gen_expr(b, s->for_cond, &ct);
+                int cv = gen_cond(b, s->for_cond);
                 IrInst *cj = emit(b, IR_CJMP); cj->a = cv; cj->true_label = strdup(l_body); cj->false_label = strdup(l_end);
             } else {
                 emit(b, IR_JMP)->label = strdup(l_body);
