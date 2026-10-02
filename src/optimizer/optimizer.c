@@ -1,4 +1,5 @@
 #include "c167cc/ir.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -64,6 +65,14 @@ static int cast_is_pure_copy(IrInst *i) {
        do lado do gerador de código: nenhum `AND #0x00FF`/sign-extend era
        emitido pra estreitamento). */
     if (cast_src_size(i) > i->size) return 0; /* estreitamento: pode truncar o valor */
+    /* BUG-9 da Sirius32 (01/10/2026): byte->byte com troca de sinal
+       (`(int8_t)u8`, `(uint8_t)s8`) também NÃO é cópia pura - o valor de 1
+       byte vive num registrador de PALAVRA com o byte alto espelhando o
+       sinal (ou zero), então reinterpretar o sinal muda o byte alto
+       (0x0080 <-> 0xFF80). Tratado como cópia, o cast sumia e
+       `(int8_t)d > 0` comparava o byte zero-estendido. O codegen já emite
+       SHL #8/ASHR #8 ou AND #0x00FF pra todo destino de 1 byte. */
+    if (i->size == 1 && cast_src_size(i) == 1 && cast_src_signed(i) != (i->is_signed != 0)) return 0;
     return !(i->size == 2 && cast_src_size(i) == 1 && cast_src_signed(i));
 }
 
@@ -121,7 +130,13 @@ static void optimize_func(IrFunc *fn) {
                 break;
             case IR_BINOP:
                 if (i->a >= 0 && i->b >= 0 && is_const[i->a] && is_const[i->b]) {
-                    long r = apply_binop(i->op, cval[i->a], cval[i->b]);
+                    long ca = cval[i->a];
+                    /* BUG-16 da Sirius32: `>>` com sinal dobrado em tempo de
+                       compilação - o valor constante pode estar guardado como
+                       0x8000..0xFFFF (ex. depois de um cast), então estende o
+                       sinal de 16 bits antes do shift aritmético. */
+                    if (i->op == OP_SHR && i->imm) ca = (long)(int16_t)(ca & 0xFFFF);
+                    long r = apply_binop(i->op, ca, cval[i->b]);
                     i->kind = IR_CONST; i->imm = r; i->op = 0; i->a = -1; i->b = -1;
                     if (!multi_def[i->dst]) { is_const[i->dst] = 1; cval[i->dst] = r; }
                 } else if (!multi_def[i->dst]) {
