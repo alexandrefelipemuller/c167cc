@@ -924,6 +924,12 @@ class Sim:
     def _bitoff_addr(self, qq):
         if qq < 0x80:
             return 0xFD00 + 2 * qq
+        # (Sirius32, 60ª leva) durante EXTR/EXTSR/EXTPR o bitoff 80-EF aponta
+        # pra área de bits do ESFR (0xF100-0xF1DF), como o campo 'reg' vai
+        # pra 0xF000 (_reg_sfr_base). Ex.: file 0x31BAC `EXTR #1 ; BCLR
+        # 0xFFD2.0` limpa o bit 0 de 0xF1D2, não de 0xFFD2.
+        if self._reg_sfr_base() == 0xF000:
+            return 0xF100 + 2 * (qq & 0x7F)
         return 0xFF00 + 2 * (qq & 0x7F)
 
     def set_bitoff_word(self, qq, word):
@@ -1155,13 +1161,20 @@ class Sim:
             return True
 
         if op == 0x0A:  # BFLDL bitoffQ,#mask8,#data8 - medido: ~2% de todas as instruções
+            # CORRIGIDO (Sirius32, 60ª leva): "0A QQ @@ ##" = máscara no byte 2,
+            # dado no byte 3. Estatística no firmware (213 BFLDL): com máscara
+            # no byte 2, só 6 casos têm dado fora da máscara (lixo de varredura);
+            # com a leitura antiga (máscara no byte 3), 83 eram no-op (máscara 0)
+            # e 162 tinham dado fora da máscara.
             qq = self.mem[pc + 1]
-            data = self.mem[pc + 2]
-            mask = self.mem[pc + 3]
-            val = self.read_regfield16(qq)
+            mask = self.mem[pc + 2]
+            data = self.mem[pc + 3]
+            # operando é bitoff (00-7F = RAM 0xFD00, 80-EF = SFR/ESFR, F0-FF =
+            # GPR), não o campo 'reg' (que daria 0xFE00+2q pra q < 0x80)
+            val = self.bitoff_word(qq)
             lo = (val & ~mask & 0xFF) | (data & mask)
             res = (val & 0xFF00) | lo
-            self.write_regfield16(qq, res)
+            self.set_bitoff_word(qq, res)
             self.flags['Z'] = res == 0
             self.flags['N'] = (res & 0x8000) != 0
             self.flags['V'] = False
@@ -1828,14 +1841,18 @@ class Sim:
             self.pc += 4
             return True
 
-        if op == 0x1A:  # BFLDH bitoffQ,#mask8,#data8 ("1A QQ ## @@": máscara ANTES do dado)
+        if op == 0x1A:  # BFLDH bitoffQ,#mask8,#data8 ("1A QQ ## @@")
+            # CORRIGIDO (Sirius32, 60ª leva): "1A QQ ## @@" = DADO no byte 2,
+            # máscara no byte 3 (o inverso do BFLDL). Estatística no firmware
+            # (115 BFLDH): com máscara no byte 3, 1 caso de dado fora da máscara;
+            # com a leitura antiga (máscara no byte 2), 112.
             qq = self.mem[pc + 1]
-            mask = self.mem[pc + 2]
-            data = self.mem[pc + 3]
-            val = self.read_regfield16(qq)
+            data = self.mem[pc + 2]
+            mask = self.mem[pc + 3]
+            val = self.bitoff_word(qq)
             hi = ((val >> 8) & ~mask & 0xFF) | (data & mask)
             res = (hi << 8) | (val & 0xFF)
-            self.write_regfield16(qq, res)
+            self.set_bitoff_word(qq, res)
             self.flags['Z'] = res == 0
             self.flags['N'] = (res & 0x8000) != 0
             self.flags['V'] = False
@@ -2007,10 +2024,16 @@ class Sim:
         if op == 0xDC:  # EXTS/EXTP/EXTSR/EXTPR Rw,#irang2 (forma registrador -
                         # fórmula já validada em ferramentas_disassembly/trace.py
                         # decode_dc(), 91 instâncias confirmadas contra firmware real)
+            # CORRIGIDO (Sirius32, 60ª leva): layout do manual "DC :mm##-rrrr" -
+            # bits 7-6 = modo, 5-4 = irang2-1, 3-0 = registrador. A versão
+            # anterior lia o registrador no nibble ALTO: nas 47 ocorrências do
+            # firmware seguidas de acesso indireto, o registrador do nibble
+            # BAIXO é sempre o par do ponteiro (ex.: DC 05 ; MOV r2,[r4] =
+            # EXTS r5,#1 com par r4:r5); o alto acertava 0/47.
             b1 = self.mem[pc + 1]
-            reg = (b1 >> 4) & 0xF
-            irang2 = ((b1 >> 2) & 0x3) + 1
-            mode = ['exts', 'extp', 'extsr', 'extpr'][b1 & 0x3]
+            reg = b1 & 0xF
+            irang2 = ((b1 >> 4) & 0x3) + 1
+            mode = ['exts', 'extp', 'extsr', 'extpr'][(b1 >> 6) & 0x3]
             value = self.r[reg]
             self.ext_active = (mode, value, irang2)
             self.pc += 2
@@ -2018,19 +2041,26 @@ class Sim:
 
         if op == 0xD7:  # EXTP #pag,#irang2 (forma imediata - só EXTP, não tem
                          # variante EXTS/EXTSR/EXTPR imediata na tabela de opcodes)
+            # CORRIGIDO (Sirius32, 60ª leva): "D7 :mm##-0 pp 0:00pp" - modo nos
+            # bits 7-6 (EXTS/EXTP/EXTSR/EXTPR #imediato), irang2-1 nos bits 5-4,
+            # página/segmento em byte2 + 2 bits baixos do byte3 (disasm.py já
+            # anotava "D7 10 00 00 -> exts 0x0,#0x2").
             b1 = self.mem[pc + 1]
-            irang2 = ((b1 >> 2) & 0x3) + 1
-            page = ((b1 & 0x3) << 8) | self.mem[pc + 2]
-            self.ext_active = ('extp', page, irang2)
+            irang2 = ((b1 >> 4) & 0x3) + 1
+            mode = ['exts', 'extp', 'extsr', 'extpr'][(b1 >> 6) & 0x3]
+            page = self.mem[pc + 2] | ((self.mem[pc + 3] & 0x3) << 8)
+            self.ext_active = (mode, page, irang2)
             self.pc += 4
             return True
 
         if op == 0xD1:  # ATOMIC #irang2 (mode 0) / EXTR #irang2 (mode 2) -
                          # mesmo opcode, só o campo de modo no byte2 distingue
                          # (manual: "D1 :00##-0"=ATOMIC, "D1 :10##-0"=EXTR)
+            # CORRIGIDO (Sirius32, 60ª leva): mesmo layout de DC/D7 - modo nos
+            # bits 7-6, irang2-1 nos bits 5-4 (D1 80 = EXTR #1, D1 20 = ATOMIC #3).
             b1 = self.mem[pc + 1]
-            irang2 = ((b1 >> 2) & 0x3) + 1
-            mode_bits = b1 & 0x3
+            irang2 = ((b1 >> 4) & 0x3) + 1
+            mode_bits = (b1 >> 6) & 0x3
             if mode_bits == 0:
                 # ATOMIC só trava interrupção/trap por N instruções - não
                 # modelamos interrupção, então não tem efeito observável aqui,

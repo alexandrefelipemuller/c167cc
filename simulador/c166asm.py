@@ -779,7 +779,11 @@ class Asm:
             r, irang = operands
             assert r[0] == 'reg'
             assert irang[0] == 'imm' and 1 <= irang[1] <= 4, "EXTP só aceita irang em [1,4]"
-            b1 = (r[1] << 4) | ((irang[1] - 1) << 2) | 0x1
+            # CORRIGIDO (Sirius32, 60ª leva): layout real "DC :mm##-rrrr" =
+            # (mode<<6) | ((irang-1)<<4) | Rw, mode=1 (EXTP). O layout antigo
+            # (Rw no nibble alto) só batia com o c166sim.py antigo; contra o
+            # firmware real ele erra 47/47 (ver c166sim.py, opcode 0xDC).
+            b1 = (0x1 << 6) | ((irang[1] - 1) << 4) | (r[1] & 0xF)
             return bytes([0xDC, b1])
 
         if mnemonic == 'RET':
