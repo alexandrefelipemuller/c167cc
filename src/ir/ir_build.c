@@ -720,7 +720,10 @@ static Type *expr_type(Builder *b, Expr *e) {
             if (callee->kind == EXPR_IDENT && e->nargs == 2) {
                 if (strcmp(callee->name, "c167cc_far_read16") == 0) return u16_type();
                 if (strcmp(callee->name, "c167cc_far_read8") == 0) return u8_type();
+                if (strcmp(callee->name, "c167cc_far_read16_seg") == 0) return u16_type();
             }
+            if (callee->kind == EXPR_IDENT && e->nargs == 3 &&
+                strcmp(callee->name, "c167cc_far_write8_seg") == 0) return u16_type();
             while (callee->kind == EXPR_DEREF) callee = callee->rhs;
             Symbol *fsym = (callee->kind == EXPR_IDENT) ? scope_lookup(b->scope, callee->name) : NULL;
             if (fsym && fsym->kind == SYM_FUNC) return fsym->func ? fsym->func->ret_type : u16_type();
@@ -1562,6 +1565,36 @@ static int gen_expr(Builder *b, Expr *e, Type **out_type) {
                 fr->a = page_v; fr->b = off_v; fr->loc = e->loc;
                 *out_type = u16_type();
                 return fr->dst;
+            }
+            /* `c167cc_far_read16_seg(seg, off)` - EXTS sibling, see
+               IR_FARREAD16_SEG in ir.h. */
+            if (e->callee->kind == EXPR_IDENT &&
+                strcmp(e->callee->name, "c167cc_far_read16_seg") == 0 &&
+                e->nargs == 2) {
+                Type *pt, *ot;
+                int seg_v = gen_expr(b, e->args[0], &pt);
+                int off_v = gen_expr(b, e->args[1], &ot);
+                IrInst *fr = emit(b, IR_FARREAD16_SEG);
+                fr->dst = new_vreg(b);
+                fr->a = seg_v; fr->b = off_v; fr->loc = e->loc;
+                *out_type = u16_type();
+                return fr->dst;
+            }
+            /* `c167cc_far_write8_seg(seg, off, val)` - see IR_FARWRITE8_SEG
+               in ir.h. Value of the call expression is val (type uint16). */
+            if (e->callee->kind == EXPR_IDENT &&
+                strcmp(e->callee->name, "c167cc_far_write8_seg") == 0 &&
+                e->nargs == 3) {
+                Type *pt, *ot, *vt;
+                int seg_v = gen_expr(b, e->args[0], &pt);
+                int off_v = gen_expr(b, e->args[1], &ot);
+                int val_v = gen_expr(b, e->args[2], &vt);
+                IrInst *fw = emit(b, IR_FARWRITE8_SEG);
+                fw->a = seg_v; fw->b = off_v; fw->loc = e->loc;
+                fw->args = xalloc(sizeof(int));
+                fw->args[0] = val_v; fw->nargs = 1;
+                *out_type = u16_type();
+                return val_v;
             }
             /* `c167cc_far_read8(page, off)` - byte sibling, see
                IR_FARREAD8_SYM in ir.h. */

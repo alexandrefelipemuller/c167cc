@@ -560,6 +560,7 @@ class Asm:
         ('MOV', 'RP'): 2, ('MOV', 'PR'): 2,  # indireto por registrador [Rw] (patch desta sessão)
         ('MOV', 'RA'): 4,  # reg <- #NOME (endereço de variável, não seu conteúdo)
         ('MOV', 'RO'): 4, ('MOV', 'OR'): 4,  # [Rw+#offset] (ABI de pilha do c167cc)
+        ('EXTS', 'Ri'): 2,  # EXTS Rw,#irang (opcode 0xDC, modo 00)
         ('EXTP', 'Ri'): 2,  # EXTP Rw,#irang (forma registrador, opcode 0xDC) -
                             # emitida pelo c167cc pra IR_FARREAD16_SYM (ver ir.h);
                             # irang aqui é sempre 1 (cobre só a MOV [Rw] pareada
@@ -768,6 +769,13 @@ class Asm:
             opcode = {'DIV': 0x4B, 'DIVU': 0x5B, 'DIVL': 0x6B, 'DIVLU': 0x7B}[mnemonic]
             n = r[1] & 0xF
             return bytes([opcode, (n << 4) | n])
+
+        if mnemonic == 'EXTS':
+            # "EXTS Rw,#irang" - igual ao EXTP mas modo 00 nos bits 7-6.
+            r, irang = operands
+            assert r[0] == 'reg'
+            assert irang[0] == 'imm' and 1 <= irang[1] <= 4, "EXTS só aceita irang em [1,4]"
+            return bytes([0xDC, (0x0 << 6) | ((irang[1] - 1) << 4) | (r[1] & 0xF)])
 
         if mnemonic == 'EXTP':
             # "EXTP Rw,#irang" (forma registrador, opcode 0xDC) - byte2 =

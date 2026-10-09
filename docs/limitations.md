@@ -995,6 +995,17 @@ pointers to them work fully.
   argument, dereferenced through arbitrary pointer arithmetic) - that
   remains exactly the rejected-attribute scope above, and the pointer/type
   model (`include/c167cc/ast.h`) still has no notion of a memory page.
+  **Segment siblings (EXTS)**: `c167cc_far_read16_seg(seg, off)`
+  (`IR_FARREAD16_SEG`) and `c167cc_far_write8_seg(seg, off, val)`
+  (`IR_FARWRITE8_SEG`) follow the same fused-instruction discipline but emit
+  `EXTS seg,#1` (opcode 0xDC, mode bits 00; physical address =
+  `seg*0x10000 + off`) immediately followed by `MOV d,[off]` / `MOVB
+  [off],val`, with any spill reloads strictly before the `EXTS`. The write
+  needs three operands live at once and only two spill scratch registers
+  exist, so codegen aborts with an error if seg, off and val are all
+  spilled (the write intrinsic is declared `void`; as an expression it
+  evaluates to `val`). See `examples/farseg_global.c` and
+  `tests/sim_exts_test.py` (assembler encoding + simulator physical access).
 - **Combined indexed + far addressing** (`[RwindRw]`/`[RwindRwPlus]`
   forms seen in the same firmware cluster): investigated 03/09/2026
   whether array/pointer indexing with a runtime (non-constant) index

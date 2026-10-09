@@ -138,6 +138,17 @@ typedef enum {
                          `c167cc_far_read8(page, off)`). Needed for file
                          0x194F8 in the sibling Sirius32 project, which reads
                          far BYTES (MOVB ...,[RbindRw]) rather than words. */
+    IR_FARREAD16_SEG, /* dst = far_read16_seg(seg=a, off=b) - SEGMENT sibling of
+                         IR_FARREAD16_SYM: EXTS seg,#1 immediately followed by
+                         MOV dst,[off] (physical = seg*0x10000 + off), same
+                         atomicity guarantee. Recognized from the exact call
+                         name `c167cc_far_read16_seg(seg, off)`. */
+    IR_FARWRITE8_SEG, /* far_write8_seg(seg=a, off=b, val=args[0]) - EXTS
+                         seg,#1 immediately followed by MOVB [off],val. Exact
+                         call name `c167cc_far_write8_seg(seg, off, val)`.
+                         Needs 3 live registers/spill slots at once: only 2
+                         spill scratch registers exist, so codegen aborts
+                         with an error if all three operands are spilled. */
     /* ---- Valores de 32 bits como PAR de palavras (BUG-6/7/8/10/11/15 da
        Sirius32, 01/10/2026) ----
        O IR continua tendo só vregs de 16 bits. Um valor uint32_t/int32_t é

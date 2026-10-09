@@ -470,3 +470,8 @@ if run_command('test', '-d', sim_dir, check : false).returncode() == 0
     args : [c167cc_exe.full_path()],
     workdir : meson.source_root())
 endif
+
+  test('sim-exts_far_access',
+    find_program('python3'),
+    args : [meson.source_root() / 'tests' / 'sim_exts_test.py', sim_dir],
+    workdir : meson.source_root())

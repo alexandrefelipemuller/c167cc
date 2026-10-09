@@ -30,6 +30,8 @@ static void dump_inst(IrInst *i) {
         case IR_SHR32_SYM: printf("  t%d = shr32 %s, %ld\n", i->dst, i->sym->name, i->imm); break;
         case IR_DIV32_SYM: printf("  t%d = div32 %s, t%d %s\n", i->dst, i->sym->name, i->b, i->op == OP_DIV ? "udiv" : "umod"); break;
         case IR_FARREAD16_SYM: printf("  t%d = far_read16 page=t%d, off=t%d\n", i->dst, i->a, i->b); break;
+        case IR_FARREAD16_SEG: printf("  t%d = far_read16_seg seg=t%d, off=t%d\n", i->dst, i->a, i->b); break;
+        case IR_FARWRITE8_SEG: printf("  far_write8_seg seg=t%d, off=t%d, val=t%d\n", i->a, i->b, i->args[0]); break;
         case IR_FARREAD8_SYM: printf("  t%d = far_read8 page=t%d, off=t%d\n", i->dst, i->a, i->b); break;
         case IR_CARRYOP: printf("  t%d = %s%s t%d, t%d\n", i->dst, op_str(i->op), i->imm ? "c" : "", i->a, i->b); break;
         case IR_MULW: printf("  t%d = mulw(%s) t%d, t%d\n", i->dst, i->is_signed ? "s" : "u", i->a, i->b); break;

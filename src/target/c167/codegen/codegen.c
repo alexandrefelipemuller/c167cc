@@ -668,6 +668,39 @@ static void gen_inst(CG *cg, IrInst *i, IrInst *next) {
             finish_dst(cg, i->dst);
             break;
         }
+        case IR_FARREAD16_SEG: {
+            /* EXTS sibling of IR_FARREAD16_SYM: reloads strictly before
+               EXTS, then EXTS seg,#1 + MOV adjacent. */
+            const char *seg = load_operand(cg, i->a, C167_SPILL_SCRATCH_1);
+            const char *off = load_operand(cg, i->b, C167_SPILL_SCRATCH_2);
+            char exts_ops[32]; snprintf(exts_ops, sizeof(exts_ops), "%s, #1", seg);
+            emit_raw(cg, NULL, "EXTS", exts_ops, "segment override for the next instruction only");
+            const char *d = dst_target(cg, i->dst);
+            char mov_ops[48]; snprintf(mov_ops, sizeof(mov_ops), "%s, [%s]", d, off);
+            emit_raw(cg, NULL, "MOV", mov_ops, "far word (segment-relative)");
+            finish_dst(cg, i->dst);
+            break;
+        }
+        case IR_FARWRITE8_SEG: {
+            int vv = i->args[0];
+            if (cg->ra->spilled[i->a] && cg->ra->spilled[i->b] && cg->ra->spilled[vv]) {
+                fprintf(stderr, "error: c167cc_far_write8_seg: seg, off and val are all spilled; only 2 spill scratch registers exist (simplify the expression)\n");
+                exit(1);
+            }
+            /* Spilled operands get distinct scratch regs; a third spilled
+               operand is impossible (checked above). All reloads precede
+               EXTS; EXTS + MOVB are adjacent. */
+            C167Reg free_sc[2] = { C167_SPILL_SCRATCH_1, C167_SPILL_SCRATCH_2 };
+            int nf = 0;
+            const char *seg = load_operand(cg, i->a, free_sc[cg->ra->spilled[i->a] ? nf++ : 0]);
+            const char *off = load_operand(cg, i->b, free_sc[cg->ra->spilled[i->b] ? nf++ : 0]);
+            const char *val = load_operand(cg, vv, free_sc[cg->ra->spilled[vv] ? nf++ : 0]);
+            char exts_ops[32]; snprintf(exts_ops, sizeof(exts_ops), "%s, #1", seg);
+            emit_raw(cg, NULL, "EXTS", exts_ops, "segment override for the next instruction only");
+            char mov_ops[48]; snprintf(mov_ops, sizeof(mov_ops), "[%s], %s", off, val);
+            emit_raw(cg, NULL, "MOVB", mov_ops, "far byte store (segment-relative)");
+            break;
+        }
         case IR_FARREAD8_SYM: {
             /* Byte sibling of IR_FARREAD16_SYM above - same EXTP/MOVB
                atomicity guarantee, see IR_FARREAD8_SYM in ir.h. */
